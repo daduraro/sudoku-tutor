@@ -1,0 +1,11 @@
+[package]
+name = "sudoku-tutor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitvec = "1.0.1"
+log = "0.4.29"
+ndarray = "0.17.2"
+thiserror = "2.0.18"
+xml = "1.0"
