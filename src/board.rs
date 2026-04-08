@@ -1,4 +1,4 @@
-use ndarray::{Array2};
+use ndarray::{Array2, ArrayView2, ArrayViewMut2, s};
 use bitvec::{bitarr, array::BitArray, order::Lsb0};
 
 use crate::error::SudokuError;
@@ -55,6 +55,13 @@ impl SudokuCellTrait for SudokuCell {
 pub trait SudokuStringEncoding {
     fn encode_sudoku_string(self) -> String;
 }
+
+pub trait SudokuStringDecoding where
+    Self: std::marker::Sized
+{
+    fn decode_sudoku_string(game: &str) -> Result<Self, SudokuError>;
+}
+
 impl<'cell, T> SudokuStringEncoding for T
 where
     T: IntoIterator<Item = &'cell SudokuCell>,
@@ -67,11 +74,6 @@ where
 
 }
 
-pub trait SudokuStringDecoding where
-    Self: std::marker::Sized
-{
-    fn decode_sudoku_string(game: &str) -> Result<Self, SudokuError>;
-}
 impl<T> SudokuStringDecoding for T
 where
     T: FromIterator<SudokuCell>
@@ -83,51 +85,60 @@ where
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct SudokuBoard {
-    state: Array2<SudokuCell>,
+pub type SudokuBoard = Array2<SudokuCell>;
+
+pub trait SudokuBoardTrait 
+where 
+    Self: std::marker::Sized
+{
+    type BoardCell;
+    
+    fn is_valid(&self) -> bool;
+    fn is_solved(&self) -> bool;
+
+    fn encode_board(&self) -> String;
+    fn decode_board(s: &str) -> Result<Self, SudokuError>;
+
+    fn block(&self, index: usize) -> ArrayView2<'_, Self::BoardCell>;
+    fn block_mut(&mut self, index: usize) -> ArrayViewMut2<'_, Self::BoardCell>;
 }
 
-impl SudokuBoard {
-    pub fn is_valid(&self) -> bool {
-        self.state.iter().all(SudokuCell::is_valid)
+impl SudokuBoardTrait for SudokuBoard {
+    type BoardCell = SudokuCell;
+    fn is_valid(&self) -> bool {
+        self.iter().all(SudokuCell::is_valid)
     }
 
-    pub fn is_solved(&self) -> bool {
-        self.state.iter().all(|c| c.count_ones() == 1)
+    fn is_solved(&self) -> bool {
+        self.iter().all(|c| c.count_ones() == 1)
     }
 
-    pub fn row(&self, r: usize) -> [SudokuCell; 9] {
-        core::array::from_fn(|c| self.state[[r, c]])
+    fn encode_board(&self) -> String {
+        self.encode_sudoku_string()
     }
 
-    pub fn col(&self, c: usize) -> [SudokuCell; 9] {
-        core::array::from_fn(|r| self.state[[r, c]])
-    }
-
-    pub fn block(&self, b: usize) -> [SudokuCell; 9] {
-        let br = 3*(b/3);
-        let bc = 3*(b%3);
-        core::array::from_fn(|i| self.state[[br + i/3, bc + i%3]])
-    }
-}
-
-impl SudokuStringEncoding for &SudokuBoard {
-    fn encode_sudoku_string(self) -> String {
-        self.state.encode_sudoku_string()
-    }
-}
-
-impl SudokuStringDecoding for SudokuBoard {
-    fn decode_sudoku_string(state: &str) -> Result<Self, SudokuError> {
-        let state  = Vec::<SudokuCell>::decode_sudoku_string(state)?;
+    fn decode_board(s: &str) -> Result<Self, SudokuError> {
+        let state = Vec::<SudokuCell>::decode_sudoku_string(s)?;
         let ndigits = state.len();
 
-        match Array2::from_shape_vec((9, 9), state) {
-            Ok(state) => Ok(SudokuBoard { state }),
-            Err(_) => Err(SudokuError::InvalidBoardSize(ndigits)),
-        }
+        Array2::from_shape_vec((9, 9), state)
+            .map_err(|_| SudokuError::InvalidBoardSize(ndigits))
     }
+
+    fn block(&self, index: usize) -> ArrayView2<'_, SudokuCell> {
+        assert!(index < 9, "Block index must be between 0 and 8");
+        let row_start = (index / 3) * 3;
+        let col_start = (index % 3) * 3;
+        self.slice(s![row_start..row_start+3, col_start..col_start+3])
+    }
+
+    fn block_mut(&mut self, index: usize) -> ArrayViewMut2<'_, SudokuCell> {
+        assert!(index < 9, "Block index must be between 0 and 8");
+        let row_start = (index / 3) * 3;
+        let col_start = (index % 3) * 3;
+        self.slice_mut(s![row_start..row_start+3, col_start..col_start+3])
+    }
+
 }
 
 #[cfg(test)]
@@ -136,8 +147,8 @@ mod tests {
 
     #[test]
     fn test_encoding() -> Result<(), SudokuError> {
-        let g = SudokuBoard::decode_sudoku_string("501740008000000050098600400040961580050000010016854070005006730070000000900072805")?;
-        assert_eq!(g, SudokuBoard::decode_sudoku_string(&g.encode_sudoku_string())?);
+        let g = SudokuBoard::decode_board("501740008000000050098600400040961580050000010016854070005006730070000000900072805")?;
+        assert_eq!(g, SudokuBoard::decode_board(&g.encode_board())?);
         Ok(())
     }
 
@@ -156,16 +167,16 @@ mod tests {
         // | 0 7 0 | 0 0 0 | 0 0 0 |
         // | 9 0 0 | 0 7 2 | 8 0 5 |
         // +-------+-------+-------+
-        let g = SudokuBoard::decode_sudoku_string("501740008000000050098600400040961580050000010016854070005006730070000000900072805").unwrap();
+        let g = SudokuBoard::decode_board("501740008000000050098600400040961580050000010016854070005006730070000000900072805").unwrap();
         assert_eq!(g.block(5).encode_sudoku_string(), "580010070");
-        assert_eq!(g.col(8).encode_sudoku_string(), "800000005");
+        assert_eq!(g.column(8).encode_sudoku_string(), "800000005");
         assert_eq!(g.row(3).encode_sudoku_string(), "040961580");
     }
 
     #[test]
     #[should_panic]
     fn test_read_oob() {
-        let g = SudokuBoard::decode_sudoku_string("501740008000000050098600400040961580050000010016854070005006730070000000900072805").unwrap();
+        let g = SudokuBoard::decode_board("501740008000000050098600400040961580050000010016854070005006730070000000900072805").unwrap();
         g.block(9);
     }
 }
