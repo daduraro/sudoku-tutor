@@ -5,6 +5,8 @@ pub enum SudokuError {
     InvalidDigit(char),
     #[error("invalid board size, expected 81 digits, found `{0}`")]
     InvalidBoardSize(usize),
+    #[error("sudoku is unsolvable")]
+    UnsolvableSudoku,
     #[error("io error")]
     IOError(#[from] std::io::Error),
     #[error("xml error")]
