@@ -2,15 +2,18 @@ mod board;
 mod io;
 mod error;
 mod strategy;
+mod display;
 
 use std::iter::zip;
 use std::path::PathBuf;
 
 use clap::{Parser};
+use colored::Colorize;
 
 use crate::board::{SudokuBoard, SudokuBoardTrait};
+use crate::display::show_sudoku_board;
 use crate::io::load_games;
-use crate::strategy::solve;
+use crate::strategy::{solve, simplify};
 
 #[derive(clap::Parser)]
 #[command(version, about, long_about = None)]
@@ -21,6 +24,14 @@ struct Cli {
     #[arg(short, long, action = clap::ArgAction::Count)]
     debug: u8,
 }
+
+fn find_diff(board: &SudokuBoard, prev_board: &SudokuBoard) -> Vec<(usize, usize, u8)>
+{
+    zip(board.indexed_iter(), prev_board).flat_map(|(((r,c), curr), prev)| {
+        (0..9).filter_map(move |d| if curr[d] ^ prev[d] { Some((r, c, d as u8)) } else { None })
+    }).collect()
+}
+
 fn main() -> Result<(), anyhow::Error> {
     let cli = Cli::parse();
 
@@ -34,27 +45,13 @@ fn main() -> Result<(), anyhow::Error> {
     if let Some(board) = boards.last() {
         println!("Step-by-step resolution");
 
-        if let Ok((states, steps)) = solve(board.clone()) {
-            for ((prev_board, curr_board), step) in zip(zip(&states, &states[1..]), &steps) {
-                println!();
+        let board = simplify(board.clone())?;
 
-                let mut lines: Vec<String> = prev_board.pretty_str().split('\n').map(String::from).collect();
-                for (line, to_append) in zip(&mut lines,  curr_board.pretty_str().split('\n')) {
-                    line.push_str("   ");
-                    line.push_str(to_append);
-                }
-
-                let step = format!("Applying {:?}", step);
-                const LINE_VISUAL_SIZE: usize = (1+9*4)*2 + 3;
-                let step_spacing: String = std::iter::repeat_n(' ', (LINE_VISUAL_SIZE - step.len()) / 2).collect();
-
-                println!("{}{}", step_spacing, step);
-                for line in lines {
-                    println!("{}", line);
-                }
-            }
-        } else {
-            println!("Board is invalid!");
+        let (states, steps) = solve(board)?;
+        for ((prev_board, curr_board), step) in zip(zip(&states, &states[1..]), &steps) {
+            println!();
+            println!("Applying {:?}", step);
+            println!("{}", show_sudoku_board(curr_board, Vec::new(), find_diff(curr_board, prev_board)));
         }
     }
 

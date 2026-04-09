@@ -17,7 +17,7 @@ pub enum Strategy {
     NakedPair,
 }
 
-fn simplify(board: SudokuBoard) -> Result<SudokuBoard, SudokuError> {
+pub fn simplify(board: SudokuBoard) -> Result<SudokuBoard, SudokuError> {
     if !board.is_valid() { return Err(SudokuError::UnsolvableSudoku) }
 
     fn simplify_region<D: ndarray::Dimension>(region: ArrayViewMut<SudokuCell, D>) -> Result<bool, SudokuError> {
@@ -136,7 +136,7 @@ pub fn solve(board: SudokuBoard) -> Result<(Vec<SudokuBoard>, Vec<Strategy>), Su
     let mut boards = Vec::<SudokuBoard>::new();
     let mut steps = Vec::<Strategy>::new();
 
-    let mut current_board = simplify(board)?;
+    let mut current_board = board;
     loop {
         let mut has_advanced = false;
         for s in [Strategy::Primary, Strategy::HiddenSingle] {
