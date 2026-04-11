@@ -1,6 +1,6 @@
-use ndarray::{ArrayViewMut};
+use ndarray::{ArrayViewMut, ArrayViewMut2, s};
 
-use crate::{board::{SudokuBoard, SudokuBoardTrait, SudokuCell, SudokuCellTrait}, error::SudokuError};
+use crate::{board::{SudokuBoard, SudokuBoardTrait, SudokuCell, SudokuCellTrait, SudokuSubCellIndex}, error::SudokuError};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Strategy {
@@ -61,38 +61,61 @@ pub fn simplify(board: SudokuBoard) -> Result<SudokuBoard, SudokuError> {
     Ok(board)
 }
 
-fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<SudokuBoard, SudokuError> {
+fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<SudokuSubCellIndex>), SudokuError> {
     let mut board = board;
+    let mut highlighted_cells = Vec::<SudokuSubCellIndex>::new();
     match s {
         Strategy::Primary => {
-            fn find_primary<D: ndarray::Dimension>(region: ArrayViewMut<SudokuCell, D>) -> bool {
-                let mut region: Vec<&mut SudokuCell> = region.into_iter().collect();
-                let primary_indices: Vec<_> = region.iter().enumerate()
-                    .filter_map(|(idx, c)| if c.is_digit() { Some(idx) } else { None } )
-                    .collect();
+            let primary_cells: Vec<_> = board.indexed_iter().filter_map(|((i, j), cell)| {
+                cell.digit_value().map(move |d| (i, j, d))
+            }).collect();
 
-                for primary_idx in primary_indices {
-                    let allowed_digits =  !*region[primary_idx];
-                    for i in 0..9 {
-                        if i == primary_idx { continue }
-                        let new_value = *region[i] & allowed_digits;
-                        if new_value != *region[i] {
-                            *region[i] = new_value;
-                            return true
-                        }
+            for (i, j, d) in primary_cells {
+                let mut changed = false;
+
+                let mask = {
+                    let mut mask = SudokuCell::empty_cell();
+                    mask.set(d as usize, false);
+                    mask
+                };
+
+                for (c, cell) in board.row_mut(i).indexed_iter_mut() {
+                    if c == j { continue }
+                    let new_cell = *cell & mask;
+                    if new_cell != *cell {
+                        changed = true;
+                        *cell = new_cell;
                     }
                 }
-                false
-            }
-            for i in 0..9 {
-                if find_primary(board.row_mut(i))
-                    || find_primary(board.column_mut(i))
-                    || find_primary(board.block_mut(i))
-                { break; }
+
+                for (r, cell) in board.column_mut(j).indexed_iter_mut() {
+                    if r == i { continue }
+                    let new_cell = *cell & mask;
+                    if new_cell != *cell {
+                        changed = true;
+                        *cell = new_cell;
+                    }
+                }
+
+                let block_idx = SudokuBoard::block_index(i, j);
+                for ((b_r, b_c), cell) in board.block_mut(block_idx).indexed_iter_mut() {
+                    let [r, c] = SudokuBoard::index_from_block(block_idx, b_r, b_c);
+                    if r == i && c == j { continue }
+                    let new_cell = *cell & mask;
+                    if new_cell != *cell {
+                        changed = true;
+                        *cell = new_cell;
+                    }
+                }
+
+                if changed {
+                    highlighted_cells.push((i, j, d));
+                    break
+                }
             }
         }
         Strategy::HiddenSingle => { 
-            fn find_hidden<D: ndarray::Dimension>(region: ArrayViewMut<SudokuCell, D>) -> bool {
+            fn find_hidden(region: ArrayViewMut2<SudokuCell>) -> Option<SudokuSubCellIndex> {
                 let freq: Vec<u8> = region.iter().fold(vec![0; 9], |acc, c| {
                     let mut acc = acc;
                     for i in 0..9 {
@@ -109,43 +132,56 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<SudokuBoard, Sudoku
                     single_digits
                 };
 
-                for c in region {
+                for ((i, j), c) in region.into_indexed_iter_mut() {
                     if c.is_digit() { continue }
-                    if (*c & single_digits).any() {
+                    if let Some(d) = (*c & single_digits).first_one() {
                         *c &= single_digits;
-                        return true
+                        return Some((i, j, d as u8));
                     }
                 }
-                false
+                None
             }
             for i in 0..9 {
-                if find_hidden(board.row_mut(i))
-                    || find_hidden(board.column_mut(i))
-                    || find_hidden(board.block_mut(i))
-                { break; }
+                if let Some((_, c, d)) = find_hidden(board.row_collapse_mut(i)) {
+                    highlighted_cells.push((i, c, d));
+                    break;
+                }
+
+                if let Some((r, _, d)) = find_hidden(board.column_collapse_mut(i)) {
+                    highlighted_cells.push((r, i, d));
+                    break;
+                }
+
+                if let Some((b_r, b_c, d)) = find_hidden(board.block_mut(i)) {
+                    let [r, c] = SudokuBoard::index_from_block(i, b_r, b_c);
+                    highlighted_cells.push((r, c, d));
+                    break;
+                }
             }
         }
         Strategy::NakedPair => { todo!() }
     };
 
-    Ok(board)
+    Ok((board, highlighted_cells))
 }
 
-pub fn solve(board: SudokuBoard) -> Result<(Vec<SudokuBoard>, Vec<Strategy>), SudokuError>
+pub type SolvedGame = (Vec<SudokuBoard>, Vec<(Strategy, Vec<SudokuSubCellIndex>)>);
+
+pub fn solve(board: SudokuBoard) -> Result<SolvedGame, SudokuError>
 {
     let mut boards = Vec::<SudokuBoard>::new();
-    let mut steps = Vec::<Strategy>::new();
+    let mut steps = Vec::<(Strategy, Vec<SudokuSubCellIndex>)>::new();
 
     let mut current_board = board;
     loop {
         let mut has_advanced = false;
         for s in [Strategy::Primary, Strategy::HiddenSingle] {
-            let next_board = apply_strategy(s, current_board.clone())?;
+            let (next_board, highlighted_cells) = apply_strategy(s, current_board.clone())?;
             if next_board != current_board {
                 has_advanced = true;
                 boards.push(current_board);
                 current_board = next_board;
-                steps.push(s);
+                steps.push((s, highlighted_cells));
                 break
             }
         }

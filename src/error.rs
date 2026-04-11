@@ -11,4 +11,6 @@ pub enum SudokuError {
     IOError(#[from] std::io::Error),
     #[error("xml error")]
     XmlError(#[from] xml::reader::Error),
+    #[error("could not find boards")]
+    NoBoardFound,
 }

@@ -1,12 +1,17 @@
-use colored::Colorize;
+use ratatui::style::Style;
+use ratatui::widgets::{HighlightSpacing, Paragraph};
+use ratatui::text::{Line, Span, Text};
+use ratatui::{Frame};
 
 use crate::board::{SudokuBoard, SudokuSubCellIndex};
+use crate::strategy::Strategy;
 
-pub fn show_sudoku_board(
-    board: &SudokuBoard, 
-    circled: Vec<SudokuSubCellIndex>, 
-    striked: Vec<SudokuSubCellIndex>,
-) -> String
+
+pub fn render_sudoku_board(
+    frame: &mut Frame,
+    board: &SudokuBoard,
+    step: Option<(Strategy, &[SudokuSubCellIndex], &[SudokuSubCellIndex])>,
+)
 {
     // The string of an empty sudoku board should be: 
     // "╔═══╤═══╤═══╦═══╤═══╤═══╦═══╤═══╤═══╗"
@@ -47,14 +52,23 @@ pub fn show_sudoku_board(
     // "║789|789|789║789|789|789║789|789|789║"
     // "╚═══╧═══╧═══╩═══╧═══╧═══╩═══╧═══╧═══╝">
 
-    let mut lines = Vec::<String>::new();
-    lines.push("╔═══╤═══╤═══╦═══╤═══╤═══╦═══╤═══╤═══╗".to_owned());
+    let mut lines = Vec::<Line>::new();
+
+    let (circled, striked) = if let Some((strat, highlighted, striked)) = step {
+        lines.push(Line::from(format!("Applying {:?}", strat)));
+        (highlighted, striked)
+    } else {
+        lines.push(Line::from("Board"));
+        ([].as_ref(), [].as_ref())
+    };
+
+    lines.push(Line::from("╔═══╤═══╤═══╦═══╤═══╤═══╦═══╤═══╤═══╗"));
     for r in 0..9 {
         let cells = board.row(r);
 
         for r_inner in 0..3 {
-            let mut line = String::new();
-            line.push('║');
+            let mut line = Vec::<Span>::new();
+            line.push(Span::from("║"));
             for (c, cell) in cells.iter().enumerate() {
 
                 for d in r_inner*3..r_inner*3+3 {
@@ -63,35 +77,35 @@ pub fn show_sudoku_board(
 
                     if striked.contains(&idx) {
                         let ch = char::from_digit(d as u32 + 1, 10).unwrap_or('�');
-                        let ch = String::from(ch).red().strikethrough().to_string();
-                        line += &ch;
+                        let ch =  Span::styled(String::from(ch), Style::default().red().crossed_out());
+                        line.push(ch);
                     }
                     else if circled.contains(&idx) {
                         let ch = char::from_u32(('①' as u32) + (d as u32)).unwrap_or('�');
-                        let ch = ch.to_string().blue().to_string();
-                        line += &ch;
-                    }
-                    else if cell[d] {
-                        let ch = char::from_digit(d as u32 + 1, 10).unwrap_or('�');
+                        let ch = Span::styled(String::from(ch), Style::default().blue());
                         line.push(ch);
                     }
-                    else { line.push(' '); }
+                    else if cell[d] {
+                        let ch = char::from_digit(d as u32 + 1, 10).unwrap_or('�').to_string();
+                        line.push(Span::from(ch));
+                    }
+                    else { line.push(Span::from(" ")); }
                 }
 
                 let col_sep = 
                     if c % 3 == 2 { '║' }
-                    else { '│' };
-                line.push(col_sep);
+                    else { '│' }.to_string();
+                line.push(Span::from(col_sep));
             }
-            lines.push(line);
+            lines.push(Line::from(line));
         }
 
         let row_sep =
             if r == 8 { "╚═══╧═══╧═══╩═══╧═══╧═══╩═══╧═══╧═══╝" }
             else if r % 3 == 2 { "╠═══╪═══╪═══╬═══╪═══╪═══╬═══╪═══╪═══╣" }
             else { "╟───┼───┼───╫───┼───┼───╫───┼───┼───╢" };
-        lines.push(row_sep.to_owned());
+        lines.push(Line::from(row_sep));
     }
 
-    lines.join("\n")
+    frame.render_widget(Text::from(lines), frame.area());
 }

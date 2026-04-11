@@ -1,4 +1,4 @@
-use ndarray::{Array2, ArrayView, ArrayView2, ArrayViewMut2, s};
+use ndarray::{Array2, ArrayView, ArrayView2, ArrayViewMut2, Axis, s};
 use bitvec::{bitarr, array::BitArray, order::Lsb0};
 
 use crate::error::SudokuError;
@@ -116,8 +116,24 @@ where
     fn encode_board(&self) -> String;
     fn decode_board(s: &str) -> Result<Self, SudokuError>;
 
+    fn row_collapse(&self, index: usize) -> ArrayView2<'_, SudokuCell>;
+    fn row_collapse_mut(&mut self, index: usize) -> ArrayViewMut2<'_, SudokuCell>;
+
+    fn column_collapse(&self, index: usize) -> ArrayView2<'_, SudokuCell>;
+    fn column_collapse_mut(&mut self, index: usize) -> ArrayViewMut2<'_, SudokuCell>;
+
     fn block(&self, index: usize) -> ArrayView2<'_, Self::BoardCell>;
     fn block_mut(&mut self, index: usize) -> ArrayViewMut2<'_, Self::BoardCell>;
+
+    fn block_index(row: usize, col: usize) -> usize {
+        (row / 3) * 3 + (col / 3)
+    }
+
+    fn index_from_block(block: usize, row: usize, col: usize) -> [usize; 2] {
+        let row = (block / 3) * 3 + row;
+        let col = (block % 3) * 3 + col;
+        [row, col]
+    }
 }
 
 impl SudokuBoardTrait for SudokuBoard {
@@ -154,6 +170,30 @@ impl SudokuBoardTrait for SudokuBoard {
 
         Array2::from_shape_vec((9, 9), state)
             .map_err(|_| SudokuError::InvalidBoardSize(ndigits))
+    }
+
+    fn row_collapse(&self, index: usize) -> ArrayView2<'_, SudokuCell> {
+        let mut v = self.view();
+        v.collapse_axis(Axis(0), index);
+        v
+    }
+
+    fn row_collapse_mut(&mut self, index: usize) -> ArrayViewMut2<'_, SudokuCell> {
+        let mut v = self.view_mut();
+        v.collapse_axis(Axis(0), index);
+        v
+    }
+
+    fn column_collapse(&self, index: usize) -> ArrayView2<'_, SudokuCell> {
+        let mut v = self.view();
+        v.collapse_axis(Axis(1), index);
+        v
+    }
+
+    fn column_collapse_mut(&mut self, index: usize) -> ArrayViewMut2<'_, SudokuCell> {
+        let mut v = self.view_mut();
+        v.collapse_axis(Axis(1), index);
+        v
     }
 
     fn block(&self, index: usize) -> ArrayView2<'_, SudokuCell> {
@@ -198,10 +238,17 @@ mod tests {
         // | 0 7 0 | 0 0 0 | 0 0 0 |
         // | 9 0 0 | 0 7 2 | 8 0 5 |
         // +-------+-------+-------+
-        let g = SudokuBoard::decode_board("501740008000000050098600400040961580050000010016854070005006730070000000900072805").unwrap();
+        let mut g = SudokuBoard::decode_board("501740008000000050098600400040961580050000010016854070005006730070000000900072805").unwrap();
         assert_eq!(g.block(5).encode_sudoku_string(), "580010070");
         assert_eq!(g.column(8).encode_sudoku_string(), "800000005");
+        assert_eq!(g.column_collapse(8).encode_sudoku_string(), "800000005");
+        assert_eq!(g.column_collapse_mut(8).encode_sudoku_string(), "800000005");
         assert_eq!(g.row(3).encode_sudoku_string(), "040961580");
+        assert_eq!(g.row_collapse(3).encode_sudoku_string(), "040961580");
+        assert_eq!(g.row_collapse_mut(3).encode_sudoku_string(), "040961580");
+
+        assert_eq!(g.row_collapse(2).indexed_iter().map(|((_,j), _)| j).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(g.column_collapse(2).indexed_iter().map(|((i,_), _)| i).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
     }
 
     #[test]
@@ -219,4 +266,5 @@ mod tests {
         let g = SudokuBoard::decode_board("501740008000000050098600400040961580050000010016854070005006730070000000900072805").unwrap();
         g.block(9);
     }
+
 }
