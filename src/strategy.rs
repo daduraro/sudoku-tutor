@@ -1,6 +1,7 @@
 use ndarray::{ArrayViewMut, ArrayViewMut2, s};
 
 use crate::{board::{SudokuBoard, SudokuBoardTrait, SudokuCell, SudokuCellTrait, SudokuSubCellIndex}, error::SudokuError};
+use crate::display::Highlight;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Strategy {
@@ -61,9 +62,9 @@ pub fn simplify(board: SudokuBoard) -> Result<SudokuBoard, SudokuError> {
     Ok(board)
 }
 
-fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<SudokuSubCellIndex>), SudokuError> {
+fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<Highlight>), SudokuError> {
     let mut board = board;
-    let mut highlighted_cells = Vec::<SudokuSubCellIndex>::new();
+    let mut highlights = Vec::<Highlight>::new();
     match s {
         Strategy::Primary => {
             let primary_cells: Vec<_> = board.indexed_iter().filter_map(|((i, j), cell)| {
@@ -109,7 +110,10 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<S
                 }
 
                 if changed {
-                    highlighted_cells.push((i, j, d));
+                    highlights.push(Highlight::Digit((i, j, d)));
+                    highlights.push(Highlight::Row(i as u8));
+                    highlights.push(Highlight::Column(j as u8));
+                    highlights.push(Highlight::Block(block_idx as u8));
                     break
                 }
             }
@@ -143,18 +147,21 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<S
             }
             for i in 0..9 {
                 if let Some((_, c, d)) = find_hidden(board.row_collapse_mut(i)) {
-                    highlighted_cells.push((i, c, d));
+                    highlights.push(Highlight::Digit((i, c, d)));
+                    highlights.push(Highlight::Row(i as u8));
                     break;
                 }
 
                 if let Some((r, _, d)) = find_hidden(board.column_collapse_mut(i)) {
-                    highlighted_cells.push((r, i, d));
+                    highlights.push(Highlight::Digit((r, i, d)));
+                    highlights.push(Highlight::Column(i as u8));
                     break;
                 }
 
                 if let Some((b_r, b_c, d)) = find_hidden(board.block_mut(i)) {
                     let [r, c] = SudokuBoard::index_from_block(i, b_r, b_c);
-                    highlighted_cells.push((r, c, d));
+                    highlights.push(Highlight::Digit((r, c, d)));
+                    highlights.push(Highlight::Block(i as u8));
                     break;
                 }
             }
@@ -162,26 +169,26 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<S
         Strategy::NakedPair => { todo!() }
     };
 
-    Ok((board, highlighted_cells))
+    Ok((board, highlights))
 }
 
-pub type SolvedGame = (Vec<SudokuBoard>, Vec<(Strategy, Vec<SudokuSubCellIndex>)>);
+pub type SolvedGame = (Vec<SudokuBoard>, Vec<(Strategy, Vec<Highlight>)>);
 
 pub fn solve(board: SudokuBoard) -> Result<SolvedGame, SudokuError>
 {
     let mut boards = Vec::<SudokuBoard>::new();
-    let mut steps = Vec::<(Strategy, Vec<SudokuSubCellIndex>)>::new();
+    let mut steps = Vec::<(Strategy, Vec<Highlight>)>::new();
 
     let mut current_board = board;
     loop {
         let mut has_advanced = false;
         for s in [Strategy::Primary, Strategy::HiddenSingle] {
-            let (next_board, highlighted_cells) = apply_strategy(s, current_board.clone())?;
+            let (next_board, highlights) = apply_strategy(s, current_board.clone())?;
             if next_board != current_board {
                 has_advanced = true;
                 boards.push(current_board);
                 current_board = next_board;
-                steps.push((s, highlighted_cells));
+                steps.push((s, highlights));
                 break
             }
         }

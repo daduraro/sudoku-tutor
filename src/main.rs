@@ -8,10 +8,11 @@ use std::iter::zip;
 use std::path::PathBuf;
 
 use clap::{Parser};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::{DefaultTerminal, Frame};
-use ratatui::style::{Color, Modifier};
-use ratatui::widgets::{Paragraph, List, ListState};
-use crossterm::event::{self, KeyCode};
+use ratatui::style::{Style, Color, Modifier};
+use ratatui::widgets::{Block, Gauge, List, ListState, Paragraph};
+use crossterm::event::{KeyCode};
 
 use crate::board::{SudokuBoard, SudokuBoardTrait};
 use crate::display::render_sudoku_board;
@@ -92,7 +93,7 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
                     },
                     KeyCode::Char('j') | KeyCode::Down => {
                         let n = states.len();
-                        if app_state.current_step + 1 < n { app_state.current_step += 1; }
+                        if app_state.current_step < n { app_state.current_step += 1; }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         if app_state.current_step > 0 { app_state.current_step -= 1; }
@@ -122,19 +123,46 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
 
 fn render(frame: &mut Frame, app_state: &mut AppState) {
     if let Some((states, steps)) = &app_state.current {
-        let state = &states[app_state.current_step];
-        if app_state.current_step > 0 {
-            let (strat, highlighted_cells) = &steps[app_state.current_step - 1];
+        let n = states.len();
+        assert!(n > 0);
+        let area = Rect::new((frame.area().width - 73)/2, 0, 73, frame.area().height);
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![
+                Constraint::Length(3),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])  
+            .split(area);
+
+        let gauge = Gauge::default()
+            .block(Block::bordered().title(format!("Step {}/{}", app_state.current_step, n)))
+            .gauge_style(Style::new().white().on_black().italic())
+            .ratio(app_state.current_step as f64 / n as f64)
+        ;
+
+        frame.render_widget(gauge, layout[0]);
+
+        let state = &states[app_state.current_step.min(n - 1)];
+        if app_state.current_step >= n {
+            let message = if state.is_solved() {
+                "Solved!"
+            } else {
+                "Sudoku is unsolvable with current strategies..."
+            };
+            frame.render_widget(message, layout[1]);
+            render_sudoku_board(frame, layout[2], state, &[], &[]);
+        } else if app_state.current_step == 0 {
+            frame.render_widget("Initial board", layout[1]);
+            render_sudoku_board(frame, layout[2], state, &[], &[]);
+        } else {
+            let (strat, highlights) = &steps[app_state.current_step - 1];
+            let message = format!("Apply {:?}", strat);
+            frame.render_widget(message, layout[1]);
+
             let prev_state = &states[app_state.current_step - 1];
             let diff = find_diff(state, prev_state);
-            let info = Some((
-                *strat,
-                highlighted_cells.as_ref(),
-                diff.as_ref()
-            ));
-            render_sudoku_board(frame, state, info);
-        } else {
-            render_sudoku_board(frame, state, None);
+            render_sudoku_board(frame, layout[2], state, highlights, &diff);
         };
     }
     else {
