@@ -1,10 +1,13 @@
-use ndarray::{ArrayViewMut, ArrayViewMut2, s};
+use ndarray::{ArrayViewMut2};
 
 use crate::{board::{SudokuBoard, SudokuBoardTrait, SudokuCell, SudokuCellTrait, SudokuSubCellIndex}, error::SudokuError};
 use crate::display::Highlight;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Strategy {
+    // apply primary strategy of all current primaries at once
+    AllPrimaries,
+
     // remove candidates when other direct cells have them
     Primary,
 
@@ -18,55 +21,11 @@ pub enum Strategy {
     NakedPair,
 }
 
-pub fn simplify(board: SudokuBoard) -> Result<SudokuBoard, SudokuError> {
-    if !board.is_valid() { return Err(SudokuError::UnsolvableSudoku) }
-
-    fn simplify_region<D: ndarray::Dimension>(region: ArrayViewMut<SudokuCell, D>) -> Result<bool, SudokuError> {
-        let mut region = region;
-
-        // collect single digits
-        let mut allowed_digits = !SudokuCell::ZERO;
-        for c in region.iter_mut() {
-            if let Some(d) = c.digit_value() {
-                let d = d as usize;
-                if !allowed_digits[d] { return Err(SudokuError::UnsolvableSudoku) } // invalid sudoku
-                allowed_digits.set(d, false);
-            }
-        }
-
-        // modify the whole region so that we remove already existing digits
-        let mut changed = false;
-        for c in region {
-            if c.is_digit() { continue }
-
-            let new_c = *c & allowed_digits;
-            if *c != new_c {
-                *c = new_c;
-                changed = true;
-            }
-        }
-        Ok(changed)
-    }
-
-    let mut board = board;
-    while !board.is_solved() {
-        let mut changed = false;
-        for i in 0..9 {
-            changed |= simplify_region(board.row_mut(i))?;
-            changed |= simplify_region(board.column_mut(i))?;
-            changed |= simplify_region(board.block_mut(i))?;
-        }
-        if !changed { break }
-    }
-
-    Ok(board)
-}
-
 fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<Highlight>), SudokuError> {
     let mut board = board;
     let mut highlights = Vec::<Highlight>::new();
     match s {
-        Strategy::Primary => {
+        Strategy::AllPrimaries | Strategy::Primary => {
             let primary_cells: Vec<_> = board.indexed_iter().filter_map(|((i, j), cell)| {
                 cell.digit_value().map(move |d| (i, j, d))
             }).collect();
@@ -109,12 +68,16 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
                     }
                 }
 
-                if changed {
+                if matches!(s, Strategy::Primary) {
+                    if changed {
+                        highlights.push(Highlight::Digit((i, j, d)));
+                        highlights.push(Highlight::Row(i as u8));
+                        highlights.push(Highlight::Column(j as u8));
+                        highlights.push(Highlight::Block(block_idx as u8));
+                        break
+                    }
+                } else {
                     highlights.push(Highlight::Digit((i, j, d)));
-                    highlights.push(Highlight::Row(i as u8));
-                    highlights.push(Highlight::Column(j as u8));
-                    highlights.push(Highlight::Block(block_idx as u8));
-                    break
                 }
             }
         }
@@ -178,13 +141,23 @@ pub fn solve(board: SudokuBoard) -> Result<SolvedGame, SudokuError>
 {
     let mut boards = Vec::<SudokuBoard>::new();
     let mut steps = Vec::<(Strategy, Vec<Highlight>)>::new();
-
     let mut current_board = board;
-    loop {
+
+    // single AllPrimaries step
+    let (next_board, highlights) = apply_strategy(Strategy::AllPrimaries, current_board.clone())?;
+    if next_board != current_board {
+        if !current_board.is_valid() { return Err(SudokuError::UnsolvableSudoku) }
+        boards.push(current_board);
+        current_board = next_board;
+        steps.push((Strategy::AllPrimaries, highlights));
+    }
+
+    while !current_board.is_solved() {
         let mut has_advanced = false;
         for s in [Strategy::Primary, Strategy::HiddenSingle] {
             let (next_board, highlights) = apply_strategy(s, current_board.clone())?;
             if next_board != current_board {
+                if !current_board.is_valid() { return Err(SudokuError::UnsolvableSudoku) }
                 has_advanced = true;
                 boards.push(current_board);
                 current_board = next_board;
@@ -192,11 +165,9 @@ pub fn solve(board: SudokuBoard) -> Result<SolvedGame, SudokuError>
                 break
             }
         }
-        if !has_advanced || current_board.is_solved() {
-            boards.push(current_board);
-            break
-        }
+        if !has_advanced { break }
     }
+    boards.push(current_board);
 
     Ok((boards, steps))
 }

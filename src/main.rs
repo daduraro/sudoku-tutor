@@ -17,7 +17,7 @@ use crossterm::event::{KeyCode};
 use crate::board::{SudokuBoard, SudokuBoardTrait};
 use crate::display::render_sudoku_board;
 use crate::io::load_games;
-use crate::strategy::{solve, simplify, SolvedGame};
+use crate::strategy::{solve, SolvedGame};
 use crate::error::SudokuError;
 
 #[derive(clap::Parser)]
@@ -69,18 +69,6 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
         return Err(SudokuError::NoBoardFound.into());
     }
 
-    // if let Some(board) = boards.last() {
-    //     println!("Step-by-step resolution");
-
-    //     let board = simplify(board.clone())?;
-
-    //     let (states, steps) = solve(board)?;
-    //     for ((prev_board, curr_board), (step, highlighted_cells)) in zip(zip(&states, &states[1..]), &steps) {
-    //         println!();
-    //         println!("Applying {:?}", step);
-    //         println!("{}", show_sudoku_board(curr_board, highlighted_cells, &find_diff(curr_board, prev_board)));
-    //     }
-    // }
 
     let mut app_state = AppState::new(boards);
     loop {
@@ -93,7 +81,7 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
                     },
                     KeyCode::Char('j') | KeyCode::Down => {
                         let n = states.len();
-                        if app_state.current_step < n { app_state.current_step += 1; }
+                        if app_state.current_step + 1 < 2*n - 1 { app_state.current_step += 1; }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         if app_state.current_step > 0 { app_state.current_step -= 1; }
@@ -108,7 +96,7 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
                     KeyCode::Char('k') | KeyCode::Up => app_state.board_selection.select_previous(),
                     KeyCode::Enter | KeyCode::Char(' ') => {
                         if let Some(idx) = app_state.board_selection.selected() {
-                            let board = simplify(app_state.boards[idx].clone())?;
+                            let board = app_state.boards[idx].clone();
                             app_state.current = Some(solve(board)?);
                             app_state.current_step = 0;
                         }
@@ -123,8 +111,9 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
 
 fn render(frame: &mut Frame, app_state: &mut AppState) {
     if let Some((states, steps)) = &app_state.current {
-        let n = states.len();
+        let n = 2*states.len() - 1;
         assert!(n > 0);
+
         let area = Rect::new((frame.area().width - 73)/2, 0, 73, frame.area().height);
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -136,34 +125,37 @@ fn render(frame: &mut Frame, app_state: &mut AppState) {
             .split(area);
 
         let gauge = Gauge::default()
-            .block(Block::bordered().title(format!("Step {}/{}", app_state.current_step, n)))
+            .block(Block::bordered().title(format!("Step {}/{}", app_state.current_step + 1, n)))
             .gauge_style(Style::new().white().on_black().italic())
-            .ratio(app_state.current_step as f64 / n as f64)
+            .ratio(app_state.current_step as f64 / (n - 1) as f64)
         ;
 
         frame.render_widget(gauge, layout[0]);
 
-        let state = &states[app_state.current_step.min(n - 1)];
-        if app_state.current_step >= n {
-            let message = if state.is_solved() {
-                "Solved!"
+        let state_idx = app_state.current_step / 2;
+        let state = &states[state_idx];
+            
+        if app_state.current_step.is_multiple_of(2) {
+            let message = if state_idx + 1 == states.len() {
+                if state.is_solved() {
+                    "Solved!"
+                } else {
+                    "Sudoku is unsolvable with current strategies..."
+                }
             } else {
-                "Sudoku is unsolvable with current strategies..."
+                "Current board"
             };
             frame.render_widget(message, layout[1]);
             render_sudoku_board(frame, layout[2], state, &[], &[]);
-        } else if app_state.current_step == 0 {
-            frame.render_widget("Initial board", layout[1]);
-            render_sudoku_board(frame, layout[2], state, &[], &[]);
         } else {
-            let (strat, highlights) = &steps[app_state.current_step - 1];
+            let (strat, highlights) = &steps[state_idx];
             let message = format!("Apply {:?}", strat);
             frame.render_widget(message, layout[1]);
 
-            let prev_state = &states[app_state.current_step - 1];
-            let diff = find_diff(state, prev_state);
-            render_sudoku_board(frame, layout[2], state, highlights, &diff);
-        };
+            let next_state = &states[state_idx + 1];
+            let diff = find_diff(next_state,state);
+            render_sudoku_board(frame, layout[2], next_state, highlights, &diff);
+        }
     }
     else {
         let list = List::new(app_state.boards.iter().map(SudokuBoardTrait::encode_board))
