@@ -6,13 +6,15 @@ mod display;
 
 use std::iter::zip;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use clap::{Parser};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::{DefaultTerminal, Frame};
 use ratatui::style::{Style, Color, Modifier};
-use ratatui::widgets::{Block, Gauge, List, ListState, Paragraph};
+use ratatui::widgets::{Block, Gauge, List, ListState};
 use crossterm::event::{KeyCode};
+use rayon::prelude::*;
 
 use crate::board::{SudokuBoard, SudokuBoardTrait};
 use crate::display::render_sudoku_board;
@@ -37,17 +39,15 @@ fn find_diff(board: &SudokuBoard, prev_board: &SudokuBoard) -> Vec<(usize, usize
     }).collect()
 }
 
-struct AppState {
-    boards: Vec<SudokuBoard>,
-    current: Option<SolvedGame>,
+struct AppState<'a> {
+    current: Option<&'a SolvedGame>,
     current_step: usize,
     board_selection: ListState,
 }
 
-impl AppState {
-    fn new(boards: Vec<SudokuBoard>) -> Self {
+impl AppState<'_> {
+    fn new() -> Self {
         AppState {
-            boards,
             current: None,
             current_step: 0,
             board_selection: ListState::default().with_selected(Some(0)),
@@ -69,10 +69,49 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
         return Err(SudokuError::NoBoardFound.into());
     }
 
+    let result = Arc::new(Mutex::new(Vec::<SolvedGame>::new()));
+    let it = rayon_progress::ProgressAdaptor::new(boards);
+    let progress = it.items_processed();
+    let total = it.len();
+    rayon::spawn({
+        let result = result.clone();
+        move || {
+            let games: Vec::<_> = it.filter_map(|b| solve(b).ok() ).collect();
+            *result.lock().unwrap() = games;
+        }
+    });
 
-    let mut app_state = AppState::new(boards);
+    let games: Vec<_> = loop {
+        if let Ok(v) = result.try_lock() && !v.is_empty(){
+            break v.to_owned()
+        }
+
+        terminal.draw(|frame| {
+            let area = frame.area().centered(
+                Constraint::Max(80),
+                Constraint::Max(5),
+            );
+            let gauge = Gauge::default()
+                .block(Block::bordered().title(format!("Solving games {}/{}", progress.get(), total)))
+                .gauge_style(Style::new().white().on_black().italic())
+                .ratio(progress.get() as f64 / total as f64);
+            frame.render_widget(gauge, area);
+        })?;
+
+
+        if crossterm::event::poll(std::time::Duration::from_secs(0))?
+            && let Some(key) = crossterm::event::read()?.as_key_press_event()
+            && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) 
+        {
+            return Ok(())
+        }
+        
+    };
+
+    // let games: Vec<_> = boards.into_par_iter().filter_map(|b| solve(b).ok() ).collect();
+    let mut app_state = AppState::new();
     loop {
-        terminal.draw(|frame| render(frame, &mut app_state))?;
+        terminal.draw(|frame| render(frame, &games, &mut app_state))?;
         if let Some(key) = crossterm::event::read()?.as_key_press_event() {
             if let Some((states, _)) = &app_state.current {
                 match key.code {
@@ -96,8 +135,8 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
                     KeyCode::Char('k') | KeyCode::Up => app_state.board_selection.select_previous(),
                     KeyCode::Enter | KeyCode::Char(' ') => {
                         if let Some(idx) = app_state.board_selection.selected() {
-                            let board = app_state.boards[idx].clone();
-                            app_state.current = Some(solve(board)?);
+                            let board = &games[idx];
+                            app_state.current = Some(board);
                             app_state.current_step = 0;
                         }
                     },
@@ -109,7 +148,7 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
 }
 
 
-fn render(frame: &mut Frame, app_state: &mut AppState) {
+fn render(frame: &mut Frame, games: &[SolvedGame], app_state: &mut AppState) {
     if let Some((states, steps)) = &app_state.current {
         let n = 2*states.len() - 1;
         assert!(n > 0);
@@ -158,7 +197,7 @@ fn render(frame: &mut Frame, app_state: &mut AppState) {
         }
     }
     else {
-        let list = List::new(app_state.boards.iter().map(SudokuBoardTrait::encode_board))
+        let list = List::new((0..games.len()).map(|i| format!("Game {}", i)))
             .style(Color::White)
             .highlight_style(Modifier::REVERSED)
             .highlight_symbol("> ");
