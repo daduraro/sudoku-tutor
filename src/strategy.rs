@@ -3,7 +3,7 @@ use ndarray::{ArrayViewMut2};
 use crate::{board::{SudokuBoard, SudokuBoardTrait, SudokuCell, SudokuCellTrait, SudokuSubCellIndex}, error::SudokuError};
 use crate::display::Highlight;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Strategy {
     // apply primary strategy of all current primaries at once
     AllPrimaries,

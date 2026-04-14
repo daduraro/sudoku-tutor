@@ -58,19 +58,19 @@ impl AppState<'_> {
 fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
     let cli = Cli::parse();
 
-    let mut boards = Vec::<SudokuBoard>::new();
+    let mut games = Vec::<SudokuBoard>::new();
     for fpath in &cli.games {
         let reader = std::fs::File::open(fpath)?;
         let reader = std::io::BufReader::new(reader);
-        boards.extend(load_games(Box::new(reader)));
+        games.extend(load_games(Box::new(reader)));
     }
 
-    if boards.is_empty() {
+    if games.is_empty() {
         return Err(SudokuError::NoBoardFound.into());
     }
 
     let result = Arc::new(Mutex::new(Vec::<SolvedGame>::new()));
-    let it = rayon_progress::ProgressAdaptor::new(boards);
+    let it = rayon_progress::ProgressAdaptor::new(games);
     let progress = it.items_processed();
     let total = it.len();
     rayon::spawn({
@@ -108,10 +108,18 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
         
     };
 
-    // let games: Vec<_> = boards.into_par_iter().filter_map(|b| solve(b).ok() ).collect();
+    let game_list: Vec<_> = games.iter().enumerate().map(|(idx, (boards, steps))| {
+        let solved = boards.last().map(|b| b.is_solved()).unwrap_or(false);
+        if solved {
+            let strat = steps.iter().map(|(strat,_)| strat).max().unwrap();
+            format!("Game {} - {:?}", idx+1, strat)
+        } else {
+            format!("Game {} - unsolved", idx+1)
+        }
+    }).collect();
     let mut app_state = AppState::new();
     loop {
-        terminal.draw(|frame| render(frame, &games, &mut app_state))?;
+        terminal.draw(|frame| render(frame, &game_list, &mut app_state))?;
         if let Some(key) = crossterm::event::read()?.as_key_press_event() {
             if let Some((states, _)) = &app_state.current {
                 match key.code {
@@ -148,7 +156,7 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
 }
 
 
-fn render(frame: &mut Frame, games: &[SolvedGame], app_state: &mut AppState) {
+fn render(frame: &mut Frame, games: &[String], app_state: &mut AppState) {
     if let Some((states, steps)) = &app_state.current {
         let n = 2*states.len() - 1;
         assert!(n > 0);
@@ -197,7 +205,7 @@ fn render(frame: &mut Frame, games: &[SolvedGame], app_state: &mut AppState) {
         }
     }
     else {
-        let list = List::new((0..games.len()).map(|i| format!("Game {}", i)))
+        let list = List::new(games.iter().cloned())
             .style(Color::White)
             .highlight_style(Modifier::REVERSED)
             .highlight_symbol("> ");
