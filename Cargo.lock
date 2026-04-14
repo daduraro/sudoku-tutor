@@ -1575,6 +1575,7 @@ dependencies = [
  "color-eyre",
  "colored",
  "crossterm",
+ "itertools",
  "log",
  "ndarray",
  "ratatui",

@@ -129,6 +129,12 @@ where
         (row / 3) * 3 + (col / 3)
     }
 
+    fn block_row_col(block: usize, idx: usize) -> (usize, usize) {
+        let row = (block / 3) * 3 + idx /3;
+        let col = (block % 3) * 3 + idx % 3;
+        (row, col)
+    }
+
     fn index_from_block(block: usize, row: usize, col: usize) -> [usize; 2] {
         let row = (block / 3) * 3 + row;
         let col = (block % 3) * 3 + col;

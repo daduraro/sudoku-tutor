@@ -9,10 +9,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use clap::{Parser};
+use itertools::Itertools;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::{DefaultTerminal, Frame};
 use ratatui::style::{Style, Color, Modifier};
 use ratatui::widgets::{Block, Gauge, List, ListState};
+use ratatui::text::Span;
 use crossterm::event::{KeyCode};
 use rayon::prelude::*;
 
@@ -110,11 +112,15 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
 
     let game_list: Vec<_> = games.iter().enumerate().map(|(idx, (boards, steps))| {
         let solved = boards.last().map(|b| b.is_solved()).unwrap_or(false);
+        let strats: Vec<_> = steps.iter().map(|(strat,_)| strat)
+            .unique().sorted()
+            .skip(1) // skip AllPrimary strategy
+            .collect();
+
         if solved {
-            let strat = steps.iter().map(|(strat,_)| strat).max().unwrap();
-            format!("Game {} - {:?}", idx+1, strat)
+            Span::styled(format!("Game {} - solved {:?}", idx+1, strats), Style::default().blue())
         } else {
-            format!("Game {} - unsolved", idx+1)
+            Span::styled(format!("Game {} - unsolved {:?}", idx+1, strats), Style::default().red())
         }
     }).collect();
     let mut app_state = AppState::new();
@@ -156,7 +162,7 @@ fn app(terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
 }
 
 
-fn render(frame: &mut Frame, games: &[String], app_state: &mut AppState) {
+fn render(frame: &mut Frame, games: &[Span], app_state: &mut AppState) {
     if let Some((states, steps)) = &app_state.current {
         let n = 2*states.len() - 1;
         assert!(n > 0);
