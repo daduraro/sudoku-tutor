@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "Debug executable 'sudoku-tutor'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=sudoku-tutor"
+                ]
+            },
+            "args": [
+                "./data/hard.opensudoku.xml"
+            ]
+        }
+    
+    ]
+}

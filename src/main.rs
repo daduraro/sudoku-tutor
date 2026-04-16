@@ -3,6 +3,7 @@ mod io;
 mod error;
 mod strategy;
 mod display;
+mod index;
 
 use std::iter::zip;
 use std::path::PathBuf;
@@ -18,7 +19,8 @@ use ratatui::text::Span;
 use crossterm::event::{KeyCode};
 use rayon::prelude::*;
 
-use crate::board::{SudokuBoard, SudokuBoardTrait};
+use crate::board::{SudokuBoard};
+use crate::index::{DigitIndex, SudokuSubCellIndex};
 use crate::display::render_sudoku_board;
 use crate::io::load_games;
 use crate::strategy::{solve, SolvedGame};
@@ -34,10 +36,12 @@ struct Cli {
     debug: u8,
 }
 
-fn find_diff(board: &SudokuBoard, prev_board: &SudokuBoard) -> Vec<(usize, usize, u8)>
+fn find_diff(board: &SudokuBoard, prev_board: &SudokuBoard) -> Vec<SudokuSubCellIndex>
 {
-    zip(board.indexed_iter(), prev_board).flat_map(|(((r,c), curr), prev)| {
-        (0..9).filter_map(move |d| if curr[d] ^ prev[d] { Some((r, c, d as u8)) } else { None })
+    zip(board.indexed_iter(), prev_board).flat_map(|((cell_idx, curr), prev)| {
+        DigitIndex::domain().iter().cloned().filter_map(move |d| {
+            if curr[d] ^ prev[d] { Some((cell_idx, d)) } else { None }
+        })
     }).collect()
 }
 

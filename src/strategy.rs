@@ -1,7 +1,8 @@
-use ndarray::{ArrayView2, ArrayViewMut2};
 use itertools::Itertools;
 
-use crate::{board::{SudokuBoard, SudokuBoardTrait, SudokuCell, SudokuCellTrait, SudokuSubCellIndex}, error::SudokuError};
+use crate::board::{ALL_DIGITS_FLAG, DigitFlag, SudokuBoard};
+use crate::index::{DigitIndex, HouseIndex, HouseIndexer};
+use crate::error::SudokuError;
 use crate::display::Highlight;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -31,106 +32,65 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
     let mut highlights = Vec::<Highlight>::new();
     match s {
         Strategy::AllPrimaries | Strategy::Primary => {
-            let primary_cells: Vec<_> = board.indexed_iter().filter_map(|((i, j), cell)| {
-                cell.digit_value().map(move |d| (i, j, d))
+            let primary_cells: Vec<_> = board.indexed_iter().filter_map(|(cell_idx, cell)| {
+                cell.digit_value().map(move |d| (cell_idx, d))
             }).collect();
 
-            for (i, j, d) in primary_cells {
+            for primary in primary_cells {
+                let (primary_cell_idx, d) = primary;
                 let mut changed = false;
 
                 let mask = {
-                    let mut mask = SudokuCell::empty_cell();
-                    mask.set(d as usize, false);
+                    let mut mask = ALL_DIGITS_FLAG;
+                    mask.set(*d, false);
                     mask
                 };
 
-                for (c, cell) in board.row_mut(i).indexed_iter_mut() {
-                    if c == j { continue }
-                    let new_cell = *cell & mask;
-                    if new_cell != *cell {
-                        changed = true;
-                        *cell = new_cell;
-                    }
-                }
-
-                for (r, cell) in board.column_mut(j).indexed_iter_mut() {
-                    if r == i { continue }
-                    let new_cell = *cell & mask;
-                    if new_cell != *cell {
-                        changed = true;
-                        *cell = new_cell;
-                    }
-                }
-
-                let block_idx = SudokuBoard::block_index(i, j);
-                for ((b_r, b_c), cell) in board.block_mut(block_idx).indexed_iter_mut() {
-                    let [r, c] = SudokuBoard::index_from_block(block_idx, b_r, b_c);
-                    if r == i && c == j { continue }
-                    let new_cell = *cell & mask;
-                    if new_cell != *cell {
-                        changed = true;
-                        *cell = new_cell;
+                for h in primary_cell_idx.houses() {
+                    for (cell_idx, cell) in board.indexed_house_mut(h) {
+                        if cell_idx == primary_cell_idx { continue }
+                        changed |= cell.apply_mask(&mask);
                     }
                 }
 
                 if matches!(s, Strategy::Primary) {
                     if changed {
-                        highlights.push(Highlight::Digit((i, j, d)));
-                        highlights.push(Highlight::Row(i as u8));
-                        highlights.push(Highlight::Column(j as u8));
-                        highlights.push(Highlight::Block(block_idx as u8));
+                        highlights.push(primary.into());
+                        highlights.push(primary_cell_idx.row().into());
+                        highlights.push(primary_cell_idx.column().into());
+                        highlights.push(primary_cell_idx.block().into());
                         break
                     }
                 } else {
-                    highlights.push(Highlight::Digit((i, j, d)));
+                    highlights.push(Highlight::Digit(primary));
                 }
             }
         }
-        Strategy::HiddenSingle => { 
-            fn find_hidden(region: ArrayViewMut2<SudokuCell>) -> Option<SudokuSubCellIndex> {
-                let freq: Vec<u8> = region.iter().fold(vec![0; 9], |acc, c| {
+        Strategy::HiddenSingle => {
+            'houses: for &house_idx in HouseIndex::domain() {
+                let freq: Vec<u8> = board.house(house_idx).fold(vec![0; DigitIndex::domain().len()], |acc, c| {
                     let mut acc = acc;
-                    for i in 0..9 {
-                        if c[i] { acc[i] += 1; }
+                    for &d in DigitIndex::domain() {
+                        if c[d] { acc[*d] += 1; }
                     }
                     acc
                 });
 
                 let single_digits = {
-                    let mut single_digits = SudokuCell::ZERO;
+                    let mut single_digits = DigitFlag::default();
                     for (d, f) in freq.into_iter().enumerate() {
                         single_digits.set(d, f == 1);
                     }
                     single_digits
                 };
-
-                for ((i, j), c) in region.into_indexed_iter_mut() {
-                    if c.is_digit() { continue }
-                    if let Some(d) = (*c & single_digits).first_one() {
-                        *c &= single_digits;
-                        return Some((i, j, d as u8));
+                for (cell_index, mut cell) in board.indexed_house_mut(house_idx) {
+                    if cell.is_digit() { continue }
+                    if let Some(d) = (**cell & single_digits).first_one() {
+                        cell &= single_digits;
+                        highlights.push((cell_index, DigitIndex::new(d)).into());
+                        highlights.push(house_idx.into());
+                        break 'houses
                     }
-                }
-                None
-            }
-            for i in 0..9 {
-                if let Some((_, c, d)) = find_hidden(board.row_collapse_mut(i)) {
-                    highlights.push(Highlight::Digit((i, c, d)));
-                    highlights.push(Highlight::Row(i as u8));
-                    break;
-                }
-
-                if let Some((r, _, d)) = find_hidden(board.column_collapse_mut(i)) {
-                    highlights.push(Highlight::Digit((r, i, d)));
-                    highlights.push(Highlight::Column(i as u8));
-                    break;
-                }
-
-                if let Some((b_r, b_c, d)) = find_hidden(board.block_mut(i)) {
-                    let [r, c] = SudokuBoard::index_from_block(i, b_r, b_c);
-                    highlights.push(Highlight::Digit((r, c, d)));
-                    highlights.push(Highlight::Block(i as u8));
-                    break;
                 }
             }
         }
@@ -140,143 +100,102 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
                 if cell.count_ones() == 2 { Some(idx) } else { None }
             }).collect();
 
-            let naked_pairs: Vec<_> = two_digits.iter().enumerate().flat_map(|(i, idx_a)|{
-                two_digits.iter().skip(i+1).filter_map(|idx_b| {
-                    if board[*idx_a] == board[*idx_b] && (
-                        idx_a.0 == idx_b.0 || idx_a.1 == idx_b.1 ||
-                        SudokuBoard::block_index(idx_a.0, idx_a.1) == SudokuBoard::block_index(idx_b.0, idx_b.1)
-                    ) {
+            let naked_pairs: Vec<_> = two_digits.iter().combinations(2)
+                .filter_map(|indices|{
+                    let idx_a = indices[0];
+                    let idx_b = indices[1];
+                    if board[idx_a] == board[idx_b] && idx_a.share_house(idx_b) {
                         Some((*idx_a, *idx_b))
                     } else {
                         None
                     }
-                })
-            }).collect();
+                }).collect();
+            
             for (idx_a, idx_b) in naked_pairs {
                 let mut changed = false;
 
-                let mask = !board[idx_a];
-                if idx_a.0 == idx_b.0 { // they share row
-                    let r = idx_a.0;
-                    for c in 0..9 {
-                        if c == idx_a.1 || c == idx_b.1 { continue }
-                        if board[(r,c)] != board[(r,c)] & mask {
-                            board[(r, c)] &= mask;
-                            changed = true;
-                            highlights.push(Highlight::Row(r as u8));
-                        }
-                    }
-                }
-                if idx_a.1 == idx_b.1 { // same column
-                    let c = idx_a.1;
-                    for r in 0..9 {
-                        if r == idx_a.0 || r == idx_b.0 { continue }
-                        if board[(r,c)] != board[(r,c)] & mask {
-                            board[(r, c)] &= mask;
-                            changed = true;
-                            highlights.push(Highlight::Column(c as u8));
-                        }
-                    }
-                }
-                let block_idx = SudokuBoard::block_index(idx_a.0, idx_a.1);
-                if block_idx == SudokuBoard::block_index(idx_b.0, idx_b.1) {
-                    for i in 0..9 {
-                        let idx = SudokuBoard::block_row_col(block_idx, i);
+                let mask = !*board[idx_a];
+                for house_idx in idx_a.houses() {
+                    if !house_idx.contains(idx_b) { continue }
+                    for (idx, cell) in board.indexed_house_mut(house_idx) {
                         if idx == idx_a || idx == idx_b { continue }
-                        if board[idx] != board[idx] & mask {
-                            board[idx] &= mask;
+                        if cell.apply_mask(&mask) {
                             changed = true;
-                            highlights.push(Highlight::Block(block_idx as u8));
+                            highlights.push(house_idx.into());
                         }
                     }
                 }
 
                 if changed {
-                    let [d0, d1] = board[idx_a].iter_ones().collect_array().unwrap();
-                    highlights.push(Highlight::Digit((idx_a.0, idx_a.1, d0 as u8)));
-                    highlights.push(Highlight::Digit((idx_a.0, idx_a.1, d1 as u8)));
-                    highlights.push(Highlight::Digit((idx_b.0, idx_b.1, d0 as u8)));
-                    highlights.push(Highlight::Digit((idx_b.0, idx_b.1, d1 as u8)));
-                    break
+                    for d in board[idx_a].iter_ones() {
+                        let d = DigitIndex::from(d);
+                        highlights.push((idx_a, d).into());
+                        highlights.push((idx_b, d).into());
+                    }
+                    break // do not process more than one naked_pair
                 }
             }
         }
         Strategy::HiddenPair => {
-            fn find_hidden_pairs(region: ArrayViewMut2<SudokuCell>) -> Option<(usize, usize, u8, u8)> {
-                // `digit_cells` tells for each digit, which cells (0..9) contain them.
-                // If two digits have the exact same two cells, then they are a hidden pair.
-                let digit_to_cell_flat_index = {
-                    let mut digit_to_cell_flat_index = [SudokuCell::default(); 9];
-                    for (idx, cell) in region.iter().enumerate() {
-                        for d in 0..9 {
-                            digit_to_cell_flat_index[d].set(idx, cell[d])
-                        }
-                    }
-                    digit_to_cell_flat_index
-                };
-
-                let digits_in_two_cells: Vec<_> = digit_to_cell_flat_index.iter().enumerate().filter_map(|(digit, cell)|{
-                    if cell.count_ones() == 2 { Some(digit) } else { None }
-                }).collect();
-
-                let mut region = region;
-                for digits in digits_in_two_cells.iter().combinations(2) {
-                    if digit_to_cell_flat_index[*digits[0]] == digit_to_cell_flat_index[*digits[1]] {
-                        let flat_indices: [usize; 2] = digit_to_cell_flat_index[*digits[0]].iter_ones().collect_array().unwrap();
-                        let mask = {
-                            let mut mask = SudokuCell::default();
-                            mask.set(*digits[0], true);
-                            mask.set(*digits[1], true);
-                            mask
-                        };
-
-                        let mut changed = false;
-                        for flat_index in flat_indices.iter() {
-                            let cell = region.iter_mut().nth(*flat_index).unwrap();
-                            if *cell != *cell & mask {
-                                changed = true;
-                                *cell &= mask;
+            'outer: for &house_idx in HouseIndex::domain() {
+                // `hidden_pairs_candidates` will yield all the pair of cells within the house
+                // that are the only ones to contain two particular digits.
+                // These will include naked pairs, which we will filter out later.
+                let hidden_pairs_candidates = {
+                    // for each digit, get which cells in the house contain them
+                    let digit_cells = {
+                        let mut digit_cells = [DigitFlag::default(); 9];
+                        for (idx, cell) in board.house(house_idx).enumerate() {
+                            for &d in DigitIndex::domain() {
+                                digit_cells[*d].set(idx, cell[d])
                             }
                         }
+                        digit_cells
+                    };
 
-                        if changed {
-                            return Some((flat_indices[0], flat_indices[1], *digits[0] as u8, *digits[1] as u8)) 
+                    // get the digits that appear in exactly two cells
+                    let digit_two_cells = digit_cells.into_iter().enumerate().filter_map(|(d, which_cells)| {
+                        if which_cells.count_ones() == 2 { Some(DigitIndex::new(d)) } else { None }
+                    });
+
+                    // for each digit that contain only two cells, check if there is
+                    // another digit with the same two cells
+                    digit_two_cells.combinations(2).filter_map(move |digits|{
+                        let digit_a = digits[0];
+                        let digit_b = digits[1];
+
+                        if digit_cells[*digit_a] == digit_cells[*digit_b] {
+                            let indices: [usize; 2] = digit_cells[*digit_a].iter_ones().collect_array().unwrap();
+                            Some((digit_a, digit_b, house_idx.index(indices[0]), house_idx.index(indices[1])))
+                        } else {
+                            None
                         }
-                    }
-                }
+                    })
+                };
 
-                None
-            }
-            for i in 0..9 {
-                if let Some((flatidx_a, flatidx_b, d0, d1)) = find_hidden_pairs(board.row_collapse_mut(i)) {
-                    highlights.push(Highlight::Row(i as u8));
-                    highlights.push(Highlight::Digit((i, flatidx_a, d0)));
-                    highlights.push(Highlight::Digit((i, flatidx_a, d1)));
-                    highlights.push(Highlight::Digit((i, flatidx_b, d0)));
-                    highlights.push(Highlight::Digit((i, flatidx_b, d1)));
-                    break
-                }
-                if let Some((flatidx_a, flatidx_b, d0, d1)) = find_hidden_pairs(board.column_collapse_mut(i)) {
-                    highlights.push(Highlight::Column(i as u8));
-                    highlights.push(Highlight::Digit((flatidx_a, i, d0)));
-                    highlights.push(Highlight::Digit((flatidx_a, i, d1)));
-                    highlights.push(Highlight::Digit((flatidx_b, i, d0)));
-                    highlights.push(Highlight::Digit((flatidx_b, i, d1)));
-                    break
-                }
-                if let Some((flatidx_a, flatidx_b, d0, d1)) = find_hidden_pairs(board.block_mut(i)) {
-                    highlights.push(Highlight::Block(i as u8));
-                    {
-                        let (r, c) = SudokuBoard::block_row_col(i, flatidx_a);
-                        highlights.push(Highlight::Digit((r, c, d0)));
-                        highlights.push(Highlight::Digit((r, c, d1)));
+                for (d0, d1, cell_idx_a, cell_idx_b) in hidden_pairs_candidates {
+                    // check if they are a naked pair, instead of a hidden one
+                    if board[cell_idx_a].count_ones() == 2 && board[cell_idx_b].count_ones() == 2 {
+                        continue
                     }
-                    {
-                        let (r, c) = SudokuBoard::block_row_col(i, flatidx_b);
-                        highlights.push(Highlight::Digit((r, c, d0)));
-                        highlights.push(Highlight::Digit((r, c, d1)));
-                    }
-                    break
+
+                    let mask = {
+                        let mut mask = DigitFlag::default();
+                        mask.set(*d0, true);
+                        mask.set(*d1, true);
+                        mask
+                    };
+
+                    board[cell_idx_a].apply_mask(&mask);
+                    board[cell_idx_b].apply_mask(&mask);
+
+                    highlights.push(house_idx.into());
+                    highlights.push((cell_idx_a, d0).into());
+                    highlights.push((cell_idx_a, d1).into());
+                    highlights.push((cell_idx_b, d0).into());
+                    highlights.push((cell_idx_b, d1).into());
+
+                    break 'outer // do not process more than one hidden pair
                 }
             }
         }
