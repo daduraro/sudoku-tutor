@@ -1519,6 +1519,7 @@ dependencies = [
  "rayon",
  "rayon-progress",
  "thiserror 2.0.18",
+ "tui-input",
  "xml",
 ]
 
@@ -1722,6 +1723,17 @@ dependencies = [
  "sharded-slab",
  "thread_local",
  "tracing-core",
+]
+
+[[package]]
+name = "tui-input"
+version = "0.15.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b1008d4ecf7480f905288022b62588424440553f2ab5cd123edce0469439da6"
+dependencies = [
+ "crossterm",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

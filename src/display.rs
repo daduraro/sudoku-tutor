@@ -80,7 +80,7 @@ pub fn render_sudoku_board(
         .cloned()
         .collect();
 
-    lines.push(Line::from("╔═══════╤═══════╤═══════╦═══════╤═══════╤═══════╦═══════╤═══════╤═══════╗"));
+    lines.push(Line::from("╔═══════════════════════╦═══════════════════════╦═══════════════════════╗"));
 
     let default_style = Style::default();
     let highlight_style = Style::default().bg(Color::Rgb(40, 40, 40));
@@ -127,19 +127,27 @@ pub fn render_sudoku_board(
                 line.push(Span::styled(" ", *style));
 
                 let col_sep = 
-                    if *cell_idx.column() % 3 == 2 { "║" }
-                    else { "│" };
-                line.push(Span::from(col_sep));
+                    if *cell_idx.column() % 3 == 2 { Span::from("║") }
+                    else { Span::styled("│", Style::default().fg(Color::Rgb(120, 120, 120))) };
+                line.push(col_sep);
             }
             
             lines.push(Line::from(line));
         }
 
         let row_sep =
-            if *r == 8 { "╚═══════╧═══════╧═══════╩═══════╧═══════╧═══════╩═══════╧═══════╧═══════╝" }
-            else if *r % 3 == 2 { "╠═══════╪═══════╪═══════╬═══════╪═══════╪═══════╬═══════╪═══════╪═══════╣" }
-            else { "╟───────┼───────┼───────╫───────┼───────┼───────╫───────┼───────┼───────╢" };
-        lines.push(Line::from(row_sep));
+            if *r == 8 { Line::from("╚═══════════════════════╩═══════════════════════╩═══════════════════════╝") }
+            else if *r % 3 == 2 { Line::from("╠═══════════════════════╬═══════════════════════╬═══════════════════════╣") }
+            else { Line::from(vec![
+                Span::from("║"),
+                Span::styled("───────┼───────┼───────", Style::default().fg(Color::Rgb(120, 120, 120))),
+                Span::from("║"),
+                Span::styled("───────┼───────┼───────", Style::default().fg(Color::Rgb(120, 120, 120))),
+                Span::from("║"),
+                Span::styled("───────┼───────┼───────", Style::default().fg(Color::Rgb(120, 120, 120))),
+                Span::from("║"),
+            ]) };
+        lines.push(row_sep);
     }
 
     frame.render_widget(Text::from(lines), area);

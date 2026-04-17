@@ -1,7 +1,9 @@
+use std::iter::zip;
+
 use bitvec::{bitarr, array::BitArray, order::Lsb0};
 
 use crate::error::SudokuError;
-use crate::index::{CellIndex, HouseIndex, HouseIndexer, DigitIndex};
+use crate::index::{CellIndex, HouseIndex, HouseIndexer, DigitIndex, SudokuSubCellIndex};
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct SudokuBoard(Vec<SudokuCell>);
@@ -57,6 +59,15 @@ impl SudokuBoard {
             }).count_ones() == 9
         })
     }
+
+    pub fn diff(&self, prev: &SudokuBoard) -> Vec<SudokuSubCellIndex> {
+        zip(self.indexed_iter(), prev).flat_map(|((cell_idx, curr), prev)| {
+            DigitIndex::domain().iter().cloned().filter_map(move |d| {
+                if curr[d] ^ prev[d] { Some((cell_idx, d)) } else { None }
+            })
+        }).collect()
+    }
+
 
 }
 
