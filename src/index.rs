@@ -218,6 +218,18 @@ impl HouseIndex {
             HouseIndex::Block(BlockIndex(6)), HouseIndex::Block(BlockIndex(7)), HouseIndex::Block(BlockIndex(8)),
         ]
     }
+
+    pub const fn rows_and_columns() ->  &'static [HouseIndex] {
+        &[
+            HouseIndex::Row(RowIndex(0)), HouseIndex::Row(RowIndex(1)), HouseIndex::Row(RowIndex(2)),
+            HouseIndex::Row(RowIndex(3)), HouseIndex::Row(RowIndex(4)), HouseIndex::Row(RowIndex(5)),
+            HouseIndex::Row(RowIndex(6)), HouseIndex::Row(RowIndex(7)), HouseIndex::Row(RowIndex(8)),
+
+            HouseIndex::Column(ColumnIndex(0)), HouseIndex::Column(ColumnIndex(1)), HouseIndex::Column(ColumnIndex(2)),
+            HouseIndex::Column(ColumnIndex(3)), HouseIndex::Column(ColumnIndex(4)), HouseIndex::Column(ColumnIndex(5)),
+            HouseIndex::Column(ColumnIndex(6)), HouseIndex::Column(ColumnIndex(7)), HouseIndex::Column(ColumnIndex(8)),
+        ]
+    }
 }
 
 impl core::convert::From<RowIndex> for HouseIndex {

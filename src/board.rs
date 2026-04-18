@@ -50,8 +50,7 @@ impl SudokuBoard {
     }
     pub fn is_solved(&self) -> bool {
         HouseIndex::domain().iter().all(|h|{
-            self.house(*h).fold(DigitFlag::default(), |acc, c| {
-                let mut acc = acc;
+            self.house(*h).fold(DigitFlag::default(), |mut acc, c| {
                 if let Some(d) = c.digit_value() {
                     acc.set(*d, true)
                 }
@@ -162,6 +161,10 @@ impl SudokuCell {
         } else {
             false
         }
+    }
+
+    pub fn contains(&self, d: &DigitIndex) -> bool {
+        self[*d]
     }
 }
 

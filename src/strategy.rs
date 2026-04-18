@@ -1,14 +1,16 @@
 use itertools::Itertools;
+use strum::{EnumIter, EnumCount};
+use strum::IntoEnumIterator;
 
 use crate::board::{ALL_DIGITS_FLAG, DigitFlag, SudokuBoard};
-use crate::index::{DigitIndex, HouseIndex, HouseIndexer};
+use crate::index::{BlockIndex, CellIndex, DigitIndex, HouseIndex, HouseIndexer};
 use crate::error::SudokuError;
 use crate::display::Highlight;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, EnumIter, EnumCount)]
 pub enum Strategy {
     // apply primary strategy of all current primaries at once
-    AllPrimaries,
+    InitialPrimaries,
 
     // remove candidates when other cells in their houses have them
     Primary,
@@ -25,24 +27,30 @@ pub enum Strategy {
     // in a house, two digits appear in just two cells, removing
     // the rest of the candidates from those two cells
     HiddenPair,
-}
 
-impl Strategy {
-    pub const fn domain() -> &'static [Strategy] {
-        &[
-            Strategy::Primary,
-            Strategy::HiddenSingle,
-            Strategy::NakedPair,
-            Strategy::HiddenPair,
-        ]
-    }
+    // a candidate appears in a single row/column within a block,
+    // thus all other appearence outside the block in the
+    // row/column can be eliminated
+    LockedCandidatePointing,
+
+
+    // a candidate in a single row/column appear only in a block,
+    // thus this candidate cannot appear in any other cell inside
+    // the block
+    LockedCandidateClaiming,
+
+    // NakedTriple,
+    // HiddenTriple,
+
+    // NakedQuad,
+    // HiddenQuad,
 }
 
 fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<Highlight>), SudokuError> {
     let mut board = board;
     let mut highlights = Vec::<Highlight>::new();
     match s {
-        Strategy::AllPrimaries | Strategy::Primary => {
+        Strategy::InitialPrimaries | Strategy::Primary => {
             let primary_cells: Vec<_> = board.indexed_iter().filter_map(|(cell_idx, cell)| {
                 cell.digit_value().map(move |d| (cell_idx, d))
             }).collect();
@@ -79,8 +87,7 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
         }
         Strategy::HiddenSingle => {
             'houses: for &house_idx in HouseIndex::domain() {
-                let freq: Vec<u8> = board.house(house_idx).fold(vec![0; DigitIndex::domain().len()], |acc, c| {
-                    let mut acc = acc;
+                let freq: Vec<u8> = board.house(house_idx).fold(vec![0; DigitIndex::domain().len()], |mut acc, c| {
                     for &d in DigitIndex::domain() {
                         if c[d] { acc[*d] += 1; }
                     }
@@ -209,13 +216,102 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
                     break 'outer // do not process more than one hidden pair
                 }
             }
-        }
+        },
+        Strategy::LockedCandidatePointing => {
+            'outer: for b in BlockIndex::domain() {
+                for d in DigitIndex::domain() {
+                    let mut rows: Vec<_> = Vec::new();
+                    let mut columns: Vec<_> = Vec::new();
+
+                    for cell_idx in b.indices() {
+                        if board[cell_idx].contains(d) {
+                            if !rows.contains(&cell_idx.row()) { rows.push(cell_idx.row()); }
+                            if !columns.contains(&cell_idx.column()) { columns.push(cell_idx.column()); }
+                        }
+                    }
+
+                    let claiming_house: Option<(HouseIndex, Vec<CellIndex>)> = 
+                        if rows.len() == 1 {
+                            let r = rows[0];
+                            Some((r.into(), columns.into_iter().map(|c| CellIndex::new(r, c)).collect()))
+                        } else if columns.len() == 1 {
+                            let c = columns[0];
+                            Some((c.into(), rows.into_iter().map(|r| CellIndex::new(r, c)).collect()))
+                        } else {
+                            None
+                        };
+                    
+                    if let Some((claiming_house, cells)) = claiming_house {
+                        let mask = {
+                            let mut mask = ALL_DIGITS_FLAG;
+                            mask.set(**d, false);
+                            mask
+                        };
+
+                        let mut changed = false;
+                        for idx in claiming_house.indices() {
+                            if &idx.block() == b { continue }
+                            changed |= board[idx].apply_mask(&mask)
+                        }
+
+                        if changed {
+                            highlights.push(claiming_house.into());
+                            highlights.push((*b).into());
+                            highlights.extend(cells.into_iter().map(|c| Highlight::Digit((c, *d))));
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+        },
+        Strategy::LockedCandidateClaiming => {
+            'strategy: for h in HouseIndex::rows_and_columns() {
+                for d in DigitIndex::domain() {
+                    let cells: Vec<_> = h.indices().iter().cloned().filter(|idx|{
+                        board[idx].contains(d)
+                    }).collect();
+                    let same_block = cells.iter().map(CellIndex::block).all_equal();
+                    if cells.is_empty() || !same_block { continue }
+                    let block = cells.first().unwrap().block();
+                    
+                    let mask = {
+                        let mut mask = ALL_DIGITS_FLAG;
+                        mask.set(**d, false);
+                        mask
+                    };
+
+                    let mut changed = false;
+                    for idx in block.indices() {
+                        if h.contains(idx) { continue }
+                        changed |= board[idx].apply_mask(&mask);
+                    }
+
+                    if changed {
+                        highlights.push((*h).into());
+                        highlights.push(block.into());
+                        highlights.extend(cells.into_iter().map(|idx| Highlight::Digit((idx, *d))));
+                        break 'strategy;
+                    }
+                }
+            }
+        },
     };
 
     Ok((board, highlights))
 }
 
-pub type SolvedGame = (Vec<SudokuBoard>, Vec<(Strategy, Vec<Highlight>)>);
+#[derive(Debug, Clone)]
+pub struct SolvedGame {
+    pub boards: Vec<SudokuBoard>,
+    pub steps: Vec<(Strategy, Vec<Highlight>)>,
+    pub strategies: Vec<Strategy>,
+}
+
+impl SolvedGame {
+    pub fn is_solved(&self) -> bool {
+        self.boards.last().map(|b| b.is_solved()).unwrap_or(false)
+    }
+}
 
 pub fn solve(board: SudokuBoard) -> Result<SolvedGame, SudokuError>
 {
@@ -223,18 +319,18 @@ pub fn solve(board: SudokuBoard) -> Result<SolvedGame, SudokuError>
     let mut steps = Vec::<(Strategy, Vec<Highlight>)>::new();
     let mut current_board = board;
 
-    // single AllPrimaries step
-    let (next_board, highlights) = apply_strategy(Strategy::AllPrimaries, current_board.clone())?;
+    // single InitialPrimaries step
+    let (next_board, highlights) = apply_strategy(Strategy::InitialPrimaries, current_board.clone())?;
     if next_board != current_board {
         if !current_board.is_valid() { return Err(SudokuError::UnsolvableSudoku) }
         boards.push(current_board);
         current_board = next_board;
-        steps.push((Strategy::AllPrimaries, highlights));
+        steps.push((Strategy::InitialPrimaries, highlights));
     }
 
     while !current_board.is_solved() {
         let mut has_advanced = false;
-        for &s in Strategy::domain() {
+        for s in Strategy::iter().skip(1) {
             let (next_board, highlights) = apply_strategy(s, current_board.clone())?;
             if next_board != current_board {
                 if !current_board.is_valid() { return Err(SudokuError::UnsolvableSudoku) }
@@ -249,5 +345,15 @@ pub fn solve(board: SudokuBoard) -> Result<SolvedGame, SudokuError>
     }
     boards.push(current_board);
 
-    Ok((boards, steps))
+
+    let strategies: Vec<_>  = steps.iter()
+        .fold(vec![false; Strategy::COUNT], |mut acc, (strat, _)|{
+            acc[ *strat as usize ] = true;
+            acc
+        }).into_iter().zip(Strategy::iter())
+        .filter_map(|(b, strat)| {
+            if b { Some(strat) } else { None }
+        }).collect();
+
+    Ok(SolvedGame { boards, steps, strategies })
 }

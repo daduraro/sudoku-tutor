@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use clap::{Parser};
-use itertools::Itertools;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::{DefaultTerminal, Frame};
 use ratatui::style::{Style, Color, Modifier, Stylize};
@@ -17,10 +16,10 @@ use ratatui::widgets::{Block, Gauge, HighlightSpacing, List, ListState};
 use ratatui::text::Span;
 use crossterm::event::{KeyCode};
 use rayon::prelude::*;
+use strum::{EnumCount, IntoEnumIterator};
 
 use crate::board::{SudokuBoard};
 use crate::display::render_sudoku_board;
-use crate::io::load_games;
 use crate::strategy::{solve, SolvedGame, Strategy};
 use crate::error::SudokuError;
 
@@ -84,87 +83,21 @@ impl FilterStatus {
 #[derive(Debug)]
 struct App {
     screen: AppScreen,
-
     games: Vec<SolvedGame>,
-    game_list: Vec<(String, Style)>,
-    game_selection_list_state: ListState,
 
-    filtered_strategies: Vec<FilterStatus>,
+    games_titles: Vec<(String, Style)>,
+    filtered_games_indices: Vec<usize>,
+    filtered_games_list_state: ListState,
+    filtered_strategies: Vec<(Strategy, usize, FilterStatus)>,
     filtered_strategies_list_state: ListState,
 }
 
 impl App {
-    fn init(terminal: &mut DefaultTerminal) -> color_eyre::Result<Option<Self>> {
-        let cli = Cli::parse();
-        let games = {
-            let mut games = Vec::<SudokuBoard>::new();
-            for fpath in &cli.games {
-                let reader = std::fs::File::open(fpath)?;
-                let reader = std::io::BufReader::new(reader);
-                games.extend(load_games(Box::new(reader)))
-            }
-            games
-        };
-
-        if games.is_empty() { return Err(SudokuError::NoBoardFound.into()); }
-
-        // solve the games
-        let it = rayon_progress::ProgressAdaptor::new(games);
-        let result = Arc::new(Mutex::default());
-        let progress = it.items_processed();
-        let total = it.len();
-        rayon::spawn({
-            let result = result.clone();
-            move || {
-                let games: Vec::<_> = it.filter_map(|b| solve(b).ok() ).collect();
-                *result.lock().unwrap() = Some(games);
-            }
-        });
-
-        let games: Vec<_> = loop {
-            // check if job is done
-            if let Ok(v) = result.try_lock() && let Some(games) = &*v {
-                break games.clone()
-            }
-
-            // 
-            terminal.draw(|frame| {
-                let area = frame.area().centered(
-                    Constraint::Max(80),
-                    Constraint::Max(6),
-                );
-                let [gauge_area, text_area] = Layout::vertical([
-                    Constraint::Min(3),
-                    Constraint::Length(1),
-                ])
-                .areas(area);
-
-                frame.render_widget("Press 'q' or ESC to exit...", text_area);
-
-                let gauge = Gauge::default()
-                    .block(Block::bordered().title(format!("Solving games {}/{}", progress.get(), total)))
-                    .gauge_style(Style::new().white().on_black().italic())
-                    .ratio(progress.get() as f64 / total as f64);
-                frame.render_widget(gauge, gauge_area);
-            })?;
-
-            if crossterm::event::poll(std::time::Duration::from_secs(0))?
-                && let Some(key) = crossterm::event::read()?.as_key_press_event()
-                && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) 
-            {
-                return Ok(None)
-            }
-        };
-
-        if games.is_empty() {
-            return Err(SudokuError::NoBoardFound.into())
-        }
-
-        let game_list: Vec<_> = games.iter().enumerate().map(|(idx, (boards, steps))| {
-            let solved = boards.last().map(|b| b.is_solved()).unwrap_or(false);
-            let strats: Vec<_> = steps.iter().map(|(strat,_)| strat)
-                .unique().sorted()
-                .skip(1) // skip AllPrimary strategy
+    fn new(games: Vec<SolvedGame>) -> Self {
+        let games_titles: Vec<_> = games.iter().enumerate().map(|(idx, game)| {
+            let solved = game.is_solved();
+            let strats: Vec<_> = game.strategies.iter()
+                .skip(1) // skip InitialPrimaries strategy
                 .collect();
 
             if solved {
@@ -174,17 +107,30 @@ impl App {
             }
         }).collect();
 
-        Ok(Some(App{
+        // only consider for filtering strategies that occur and that
+        // do not appear in every game
+        let filtered_strategies: Vec<_> = games.iter().fold(vec![0; Strategy::COUNT], |mut freq, game| {
+                for s in &game.strategies {
+                    freq[*s as usize] += 1;
+                }
+                freq
+            }).into_iter()
+            .zip(Strategy::iter()).filter_map(|(f, s)| {
+                if f != games.len() && f > 0 { Some((s, f, FilterStatus::Neutral)) } else { None }
+            }).collect();
+
+        let n = games_titles.len();
+        App {
             screen: Default::default(),
             games,
-            game_list,
-            game_selection_list_state: ListState::default().with_selected(Some(0)),
+            games_titles,
+            filtered_games_indices: Vec::from_iter(0..n),
+            filtered_games_list_state: ListState::default(),
 
-            filtered_strategies: vec![FilterStatus::Neutral; Strategy::domain()[1..].len()],
+            filtered_strategies,
             filtered_strategies_list_state: ListState::default().with_selected(Some(0)),
-        }))
+        }
     }
-
 
     fn run(mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
         loop {
@@ -194,23 +140,43 @@ impl App {
         Ok(())
     }
 
+    fn update_filtered_list(&mut self) {
+        let include_strategies: Vec<_> = self.filtered_strategies.iter().filter_map(|(strat, _, status)|{
+            if *status == FilterStatus::Include { Some(*strat) } else { None }
+        }).collect();
+
+        let exclude_strategies: Vec<_> = self.filtered_strategies.iter().filter_map(|(strat, _, status)|{
+            if *status == FilterStatus::Exclude { Some(*strat) } else { None }
+        }).collect();
+
+        self.filtered_games_indices = self.games.iter().enumerate()
+            .filter_map(|(idx, game)|{
+                if game.strategies.iter().any(|s| exclude_strategies.contains(s))
+                    || include_strategies.iter().any(|s| game.strategies.iter().all(|gs| gs != s))
+                {
+                    None
+                } else {
+                    Some(idx)
+                }
+            }).collect();
+    }
+
     fn handle_input(&mut self) -> color_eyre::Result<bool> {
         if let Some(key) = crossterm::event::read()?.as_key_press_event() {
             match &mut self.screen {
                 AppScreen::GameView(view_state) => {
-                    let (states, _) = &self.games[view_state.game_idx];
-                    
-                    #[allow(clippy::collapsible_match)]
+                    let game = &self.games[view_state.game_idx];
+                    let n = game.boards.len();
+
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => {
                             self.screen = AppScreen::default()
                         },
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            let n = states.len();
-                            if view_state.step + 1 < 2*n - 1 { view_state.step += 1; }
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if view_state.step > 0 { view_state.step -= 1; }
+                        KeyCode::Char('j') | KeyCode::Down if view_state.step + 1 < 2*n - 1 => {
+                            view_state.step += 1;
+                        },
+                        KeyCode::Char('k') | KeyCode::Up if view_state.step > 0 => {
+                            view_state.step -= 1;
                         },
                         _ => {},
                     }
@@ -218,11 +184,11 @@ impl App {
                 AppScreen::GameSelectionView(GameSelectionViewState::Selection) => match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(false),
                     KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('f') => self.screen = AppScreen::GameSelectionView(GameSelectionViewState::Filter),
-                    KeyCode::Char('j') | KeyCode::Down => self.game_selection_list_state.select_next(),
-                    KeyCode::Char('k') | KeyCode::Up => self.game_selection_list_state.select_previous(),
+                    KeyCode::Char('j') | KeyCode::Down => self.filtered_games_list_state.select_next(),
+                    KeyCode::Char('k') | KeyCode::Up => self.filtered_games_list_state.select_previous(),
                     KeyCode::Enter | KeyCode::Char(' ') => {
-                        if let Some(idx) = self.game_selection_list_state.selected() {
-                            self.screen = AppScreen::GameView(GameViewState { game_idx: idx, step: 0 })
+                        if let Some(idx) = self.filtered_games_list_state.selected() {
+                            self.screen = AppScreen::GameView(GameViewState { game_idx: self.filtered_games_indices[idx], step: 0 })
                         }
                     },
                     _ => {},
@@ -234,8 +200,9 @@ impl App {
                     KeyCode::Char('k') | KeyCode::Up => self.filtered_strategies_list_state.select_previous(),
                     KeyCode::Enter | KeyCode::Char(' ') => {
                         if let Some(idx) = self.filtered_strategies_list_state.selected() {
-                            self.filtered_strategies[idx].advance();
-                            self.game_selection_list_state.select(None);
+                            self.filtered_strategies[idx].2.advance();
+                            self.filtered_games_list_state.select(None);
+                            self.update_filtered_list();
                         }
                     },
                     _ => {},
@@ -258,45 +225,40 @@ impl App {
             Constraint::Fill(1),
             Constraint::Length(1),
         ]).areas(frame.area());
+
+        let filter_size = Strategy::iter().skip(1).fold(0, |acc, s| acc.max(format!("|X {:?} (0000)|", s).len() as u16) );
+
         let [filter_area, games_area] = Layout::horizontal([
-            Constraint::Max(20),
-            Constraint::Min(30),
+            Constraint::Max(filter_size),
+            Constraint::Fill(1),
         ]).areas(top_area);
 
-        let filter_list = List::new(Strategy::domain()[1..].iter().zip(&self.filtered_strategies)
-            .map(|(strategy, status)|{
+        let filter_list = List::new(self.filtered_strategies.iter()
+            .map(|(strategy, freq, status)|{
                 match status {
-                    FilterStatus::Neutral => Span::from(format!("  {:?}", strategy)),
-                    FilterStatus::Include => Span::styled(format!("✓ {:?}", strategy), Style::default().green()),
-                    FilterStatus::Exclude => Span::styled(format!("X {:?}", strategy), Style::default().red()),
+                    FilterStatus::Neutral => Span::from(format!("  {:?} ({})", strategy, freq)),
+                    FilterStatus::Include => Span::styled(format!("✓ {:?} ({})", strategy, freq), Style::default().green()),
+                    FilterStatus::Exclude => Span::styled(format!("X {:?} ({})", strategy, freq), Style::default().red()),
                 }
             }))
-            .highlight_symbol("> ")
             .block(Block::bordered().title("Filter"))
             ;
 
-        let include_strategies: Vec<_> = Strategy::domain()[1..].iter().zip(&self.filtered_strategies).filter_map(|(strat, status)|{
-            if *status == FilterStatus::Include { Some(*strat) } else { None }
-        }).collect();
+        let game_list_title = if self.filtered_games_indices.len() == self.games.len() {
+            "Games".to_owned()
+        } else {
+            format!("Games ({}/{})", self.filtered_games_indices.len(), self.games.len())
+        };
 
-        let exclude_strategies: Vec<_> = Strategy::domain()[1..].iter().zip(&self.filtered_strategies).filter_map(|(strat, status)|{
-            if *status == FilterStatus::Exclude { Some(*strat) } else { None }
-        }).collect();
-
-        let games_list = List::new(self.game_list.iter().zip(&self.games)
-                .filter_map(|((text, style), (_game, steps))| {
-                    if steps.iter().any(|(strat,_)|{ exclude_strategies.contains(strat) })
-                       || include_strategies.iter().any(|strat|{ steps.iter().all(|(s, _)| s != strat) })
-                    { 
-                        None 
-                    } else {
-                        Some(Span::styled(text, *style))
-                    }
+        let games_list = List::new(self.filtered_games_indices.iter()
+                .map(|idx| {
+                    let (text, style) = &self.games_titles[*idx];
+                    Span::styled(text, *style)
                 })
             )
             .highlight_symbol("> ")
             .highlight_spacing(HighlightSpacing::Always)
-            .block(Block::bordered().title("Games"))
+            .block(Block::bordered().title(game_list_title))
             ;
 
         match state {
@@ -305,14 +267,14 @@ impl App {
                 frame.render_stateful_widget(filter_list, filter_area, &mut self.filtered_strategies_list_state); 
 
                 let games_list = games_list.dim();
-                frame.render_stateful_widget(games_list, games_area, &mut self.game_selection_list_state); 
+                frame.render_stateful_widget(games_list, games_area, &mut self.filtered_games_list_state); 
             },
             GameSelectionViewState::Selection => {
                 let filter_list = filter_list.dim();
                 frame.render_stateful_widget(filter_list, filter_area, &mut self.filtered_strategies_list_state); 
 
                 let games_list = games_list.style(Color::White).highlight_style(Modifier::REVERSED);
-                frame.render_stateful_widget(games_list, games_area, &mut self.game_selection_list_state); 
+                frame.render_stateful_widget(games_list, games_area, &mut self.filtered_games_list_state); 
             },
         }
 
@@ -320,20 +282,21 @@ impl App {
     }
 
     fn render_game(&self, frame: &mut Frame, state: &GameViewState) {
-        let (boards, steps) = &self.games[state.game_idx];
-        let n = 2*boards.len() - 1;
+        let game = &self.games[state.game_idx];
+        let n = 2*game.boards.len() - 1;
         assert!(n > 0);
 
         let area = Rect::new((frame.area().width - 73)/2, 0, 73, frame.area().height);
-        let [header_area, strat_area, board_area] = Layout::vertical([
+        let [header_area, strat_area, board_area, shortcut_area] = Layout::vertical([
                 Constraint::Length(3),
                 Constraint::Length(1),
-                Constraint::Min(0),
+                Constraint::Fill(1),
+                Constraint::Length(1),
             ])  
             .areas(area);
 
         let gauge = Gauge::default()
-            .block(Block::bordered().title(format!("Step {}/{}", state.step + 1, n)))
+            .block(Block::bordered().title(format!("Game {} - Step {}/{}", state.game_idx + 1, state.step + 1, n)))
             .gauge_style(Style::new().white().on_black().italic())
             .ratio(state.step as f64 / (n - 1) as f64)
         ;
@@ -341,10 +304,10 @@ impl App {
         frame.render_widget(gauge, header_area);
 
         let board_idx = state.step / 2;
-        let board = &boards[board_idx];
+        let board = &game.boards[board_idx];
             
         if state.step.is_multiple_of(2) {
-            let message = if board_idx + 1 == boards.len() {
+            let message = if board_idx + 1 == game.boards.len() {
                 if board.is_solved() {
                     "Solved!"
                 } else {
@@ -356,23 +319,93 @@ impl App {
             frame.render_widget(message, strat_area);
             render_sudoku_board(frame, board_area, board, &[], &[]);
         } else {
-            let (strat, highlights) = &steps[board_idx];
+            let (strat, highlights) = &game.steps[board_idx];
             let message = format!("Apply {:?}", strat);
             frame.render_widget(message, strat_area);
 
-            let next_board = &boards[board_idx + 1];
+            let next_board = &game.boards[board_idx + 1];
             let diff = next_board.diff(board);
             render_sudoku_board(frame, board_area, next_board, highlights, &diff);
         }
+
+        frame.render_widget("[q], [ESC]: back | [↑], [k]: previous move | [↓], [j]: next move", shortcut_area);
     }
 
+}
+
+fn load_games(terminal: &mut DefaultTerminal, file_paths: &[PathBuf]) -> color_eyre::Result<Option<Vec<SolvedGame>>> {
+    let games = {
+        let mut games = Vec::<SudokuBoard>::new();
+        for fpath in file_paths {
+            let reader = std::fs::File::open(fpath)?;
+            let reader = std::io::BufReader::new(reader);
+            games.extend(crate::io::load_games(Box::new(reader)))
+        }
+        games
+    };
+
+    if games.is_empty() { return Err(SudokuError::NoBoardFound.into()); }
+
+    // solve the games
+    let it = rayon_progress::ProgressAdaptor::new(games);
+    let result = Arc::new(Mutex::default());
+    let progress = it.items_processed();
+    let total = it.len();
+    rayon::spawn({
+        let result = result.clone();
+        move || {
+            let games: Vec::<_> = it.filter_map(|b| solve(b).ok() ).collect();
+            *result.lock().unwrap() = Some(games);
+        }
+    });
+
+    let games: Vec<_> = loop {
+        // check if job is done
+        if let Ok(v) = result.try_lock() && let Some(games) = &*v {
+            break games.clone()
+        }
+
+        // 
+        terminal.draw(|frame| {
+            let area = frame.area().centered(
+                Constraint::Max(80),
+                Constraint::Max(6),
+            );
+            let [gauge_area, text_area] = Layout::vertical([
+                Constraint::Min(3),
+                Constraint::Length(1),
+            ])
+            .areas(area);
+
+            frame.render_widget("Press 'q' or ESC to exit...", text_area);
+
+            let gauge = Gauge::default()
+                .block(Block::bordered().title(format!("Solving games {}/{}", progress.get(), total)))
+                .gauge_style(Style::new().white().on_black().italic())
+                .ratio(progress.get() as f64 / total as f64);
+            frame.render_widget(gauge, gauge_area);
+        })?;
+
+        if crossterm::event::poll(std::time::Duration::from_secs(0))?
+            && let Some(key) = crossterm::event::read()?.as_key_press_event()
+            && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) 
+        {
+            return Ok(None)
+        }
+    };
+
+    if games.is_empty() {
+        return Err(SudokuError::NoBoardFound.into())
+    }
+    Ok(Some(games))
 }
 
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
     ratatui::run(|term| {
-        if let Some(app) = App::init(term)? {
-            app.run(term)?
+        let cli = Cli::parse();
+        if let Some(games) = load_games(term, &cli.games)? {
+            App::new(games).run(term)?
         }
         Ok(())
     })
