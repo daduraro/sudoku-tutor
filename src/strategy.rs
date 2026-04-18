@@ -27,6 +27,17 @@ pub enum Strategy {
     HiddenPair,
 }
 
+impl Strategy {
+    pub const fn domain() -> &'static [Strategy] {
+        &[
+            Strategy::Primary,
+            Strategy::HiddenSingle,
+            Strategy::NakedPair,
+            Strategy::HiddenPair,
+        ]
+    }
+}
+
 fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<Highlight>), SudokuError> {
     let mut board = board;
     let mut highlights = Vec::<Highlight>::new();
@@ -223,7 +234,7 @@ pub fn solve(board: SudokuBoard) -> Result<SolvedGame, SudokuError>
 
     while !current_board.is_solved() {
         let mut has_advanced = false;
-        for s in [Strategy::Primary, Strategy::HiddenSingle, Strategy::NakedPair, Strategy::HiddenPair] {
+        for &s in Strategy::domain() {
             let (next_board, highlights) = apply_strategy(s, current_board.clone())?;
             if next_board != current_board {
                 if !current_board.is_valid() { return Err(SudokuError::UnsolvableSudoku) }

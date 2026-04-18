@@ -12,8 +12,8 @@ use clap::{Parser};
 use itertools::Itertools;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::{DefaultTerminal, Frame};
-use ratatui::style::{Style, Color, Modifier};
-use ratatui::widgets::{Block, Gauge, List, ListState};
+use ratatui::style::{Style, Color, Modifier, Stylize};
+use ratatui::widgets::{Block, Gauge, HighlightSpacing, List, ListState};
 use ratatui::text::Span;
 use crossterm::event::{KeyCode};
 use rayon::prelude::*;
@@ -21,7 +21,7 @@ use rayon::prelude::*;
 use crate::board::{SudokuBoard};
 use crate::display::render_sudoku_board;
 use crate::io::load_games;
-use crate::strategy::{solve, SolvedGame};
+use crate::strategy::{solve, SolvedGame, Strategy};
 use crate::error::SudokuError;
 
 #[derive(clap::Parser)]
@@ -40,11 +40,45 @@ struct GameViewState {
     step: usize,
 }
 
-#[derive(Debug, Default)]
-enum AppScreen {
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum GameSelectionViewState {
     #[default]
-    GameSelectionView,
+    Selection,
+    Filter,
+}
+
+#[derive(Debug)]
+enum AppScreen {
+    GameSelectionView(GameSelectionViewState),
     GameView(GameViewState),
+}
+
+impl core::default::Default for AppScreen {
+    fn default() -> Self {
+        AppScreen::GameSelectionView(Default::default())
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum FilterStatus {
+    #[default]
+    Neutral,
+    Include,
+    Exclude,
+}
+
+impl FilterStatus {
+    fn next(&self) -> Self {
+        match &self {
+            FilterStatus::Neutral => FilterStatus::Include,
+            FilterStatus::Include => FilterStatus::Exclude,
+            FilterStatus::Exclude => FilterStatus::Neutral,
+        }
+    }
+
+    fn advance(&mut self) {
+        *self = self.next()
+    }
 }
 
 #[derive(Debug)]
@@ -54,8 +88,10 @@ struct App {
     games: Vec<SolvedGame>,
     game_list: Vec<(String, Style)>,
     game_selection_list_state: ListState,
-}
 
+    filtered_strategies: Vec<FilterStatus>,
+    filtered_strategies_list_state: ListState,
+}
 
 impl App {
     fn init(terminal: &mut DefaultTerminal) -> color_eyre::Result<Option<Self>> {
@@ -139,10 +175,13 @@ impl App {
         }).collect();
 
         Ok(Some(App{
-            screen: AppScreen::GameSelectionView,
+            screen: Default::default(),
             games,
             game_list,
             game_selection_list_state: ListState::default().with_selected(Some(0)),
+
+            filtered_strategies: vec![FilterStatus::Neutral; Strategy::domain()[1..].len()],
+            filtered_strategies_list_state: ListState::default().with_selected(Some(0)),
         }))
     }
 
@@ -164,7 +203,7 @@ impl App {
                     #[allow(clippy::collapsible_match)]
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => {
-                            self.screen = AppScreen::GameSelectionView
+                            self.screen = AppScreen::default()
                         },
                         KeyCode::Char('j') | KeyCode::Down => {
                             let n = states.len();
@@ -176,8 +215,9 @@ impl App {
                         _ => {},
                     }
                 },
-                AppScreen::GameSelectionView => match key.code {
+                AppScreen::GameSelectionView(GameSelectionViewState::Selection) => match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(false),
+                    KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('f') => self.screen = AppScreen::GameSelectionView(GameSelectionViewState::Filter),
                     KeyCode::Char('j') | KeyCode::Down => self.game_selection_list_state.select_next(),
                     KeyCode::Char('k') | KeyCode::Up => self.game_selection_list_state.select_previous(),
                     KeyCode::Enter | KeyCode::Char(' ') => {
@@ -186,7 +226,20 @@ impl App {
                         }
                     },
                     _ => {},
-                }
+                },
+                AppScreen::GameSelectionView(GameSelectionViewState::Filter) => match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(false),
+                    KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('f') => self.screen = AppScreen::GameSelectionView(GameSelectionViewState::Selection),
+                    KeyCode::Char('j') | KeyCode::Down => self.filtered_strategies_list_state.select_next(),
+                    KeyCode::Char('k') | KeyCode::Up => self.filtered_strategies_list_state.select_previous(),
+                    KeyCode::Enter | KeyCode::Char(' ') => {
+                        if let Some(idx) = self.filtered_strategies_list_state.selected() {
+                            self.filtered_strategies[idx].advance();
+                            self.game_selection_list_state.select(None);
+                        }
+                    },
+                    _ => {},
+                },
             }
         }
 
@@ -195,19 +248,75 @@ impl App {
 
     fn render(&mut self, frame: &mut Frame) {
         match &self.screen {
-            AppScreen::GameSelectionView => self.render_game_list(frame),
+            AppScreen::GameSelectionView(state) => self.render_game_list(frame, &state.clone()),
             AppScreen::GameView(state) => self.render_game(frame, state),
         }
     }
 
-    fn render_game_list(&mut self, frame: &mut Frame) {
-        let list = List::new(self.game_list.iter()
-                .map(|(text, style)| Span::styled(text, *style))
+    fn render_game_list(&mut self, frame: &mut Frame, state: &GameSelectionViewState) {
+        let [top_area, shortcut_area] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ]).areas(frame.area());
+        let [filter_area, games_area] = Layout::horizontal([
+            Constraint::Max(20),
+            Constraint::Min(30),
+        ]).areas(top_area);
+
+        let filter_list = List::new(Strategy::domain()[1..].iter().zip(&self.filtered_strategies)
+            .map(|(strategy, status)|{
+                match status {
+                    FilterStatus::Neutral => Span::from(format!("  {:?}", strategy)),
+                    FilterStatus::Include => Span::styled(format!("✓ {:?}", strategy), Style::default().green()),
+                    FilterStatus::Exclude => Span::styled(format!("X {:?}", strategy), Style::default().red()),
+                }
+            }))
+            .highlight_symbol("> ")
+            .block(Block::bordered().title("Filter"))
+            ;
+
+        let include_strategies: Vec<_> = Strategy::domain()[1..].iter().zip(&self.filtered_strategies).filter_map(|(strat, status)|{
+            if *status == FilterStatus::Include { Some(*strat) } else { None }
+        }).collect();
+
+        let exclude_strategies: Vec<_> = Strategy::domain()[1..].iter().zip(&self.filtered_strategies).filter_map(|(strat, status)|{
+            if *status == FilterStatus::Exclude { Some(*strat) } else { None }
+        }).collect();
+
+        let games_list = List::new(self.game_list.iter().zip(&self.games)
+                .filter_map(|((text, style), (_game, steps))| {
+                    if steps.iter().any(|(strat,_)|{ exclude_strategies.contains(strat) })
+                       || include_strategies.iter().any(|strat|{ steps.iter().all(|(s, _)| s != strat) })
+                    { 
+                        None 
+                    } else {
+                        Some(Span::styled(text, *style))
+                    }
+                })
             )
-            .style(Color::White)
-            .highlight_style(Modifier::REVERSED)
-            .highlight_symbol("> ");
-        frame.render_stateful_widget(list, frame.area(), &mut self.game_selection_list_state);
+            .highlight_symbol("> ")
+            .highlight_spacing(HighlightSpacing::Always)
+            .block(Block::bordered().title("Games"))
+            ;
+
+        match state {
+            GameSelectionViewState::Filter => {
+                let filter_list = filter_list.style(Color::White).highlight_style(Modifier::REVERSED);
+                frame.render_stateful_widget(filter_list, filter_area, &mut self.filtered_strategies_list_state); 
+
+                let games_list = games_list.dim();
+                frame.render_stateful_widget(games_list, games_area, &mut self.game_selection_list_state); 
+            },
+            GameSelectionViewState::Selection => {
+                let filter_list = filter_list.dim();
+                frame.render_stateful_widget(filter_list, filter_area, &mut self.filtered_strategies_list_state); 
+
+                let games_list = games_list.style(Color::White).highlight_style(Modifier::REVERSED);
+                frame.render_stateful_widget(games_list, games_area, &mut self.game_selection_list_state); 
+            },
+        }
+
+        frame.render_widget("[q], [ESC]: exit | [↑], [k]: move up | [↓], [j]: move down | [Space], [Enter]: select | [f], [Tab]: Filter ⇄ Games", shortcut_area);
     }
 
     fn render_game(&self, frame: &mut Frame, state: &GameViewState) {
