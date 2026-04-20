@@ -1,3 +1,7 @@
+use itertools::Itertools;
+
+use crate::board::DigitFlag;
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub struct DigitIndex(usize);
 
@@ -298,6 +302,41 @@ impl CellIndex {
         self.row() == other.row() ||
         self.column() == other.column() ||
         self.block() == other.block()
+    }
+}
+
+pub trait CellIndexIter {
+    fn share_row(self) -> bool;
+    fn share_column(self) -> bool;
+    fn share_block(self) -> bool;
+    fn share_house(self) -> bool;
+}
+
+impl<T> CellIndexIter for T
+where 
+    T: Iterator<Item=CellIndex>
+{
+    fn share_row(self) -> bool {
+        self.map(|idx| idx.row()).all_equal()
+    }
+
+    fn share_column(self) -> bool {
+        self.map(|idx| idx.column()).all_equal()
+    }
+
+    fn share_block(self) -> bool {
+        self.map(|idx| idx.block()).all_equal()
+    }
+
+    fn share_house(self) -> bool {
+        let (rows, columns, blocks) = self.fold((DigitFlag::ZERO, DigitFlag::ZERO, DigitFlag::ZERO), 
+            |(mut rows, mut columns, mut blocks), idx|{
+                rows.set(*idx.row(), true);
+                columns.set(*idx.column(), true);
+                blocks.set(*idx.block(), true);
+                (rows, columns, blocks)
+            });
+        rows.count_ones() == 1 || columns.count_ones() == 1 || blocks.count_ones() == 1
     }
 }
 

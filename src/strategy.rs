@@ -2,8 +2,8 @@ use itertools::Itertools;
 use strum::{EnumIter, EnumCount};
 use strum::IntoEnumIterator;
 
-use crate::board::{ALL_DIGITS_FLAG, DigitFlag, SudokuBoard, DigitMask, DigitMaskFromIter};
-use crate::index::{BlockIndex, RowIndex, ColumnIndex, CellIndex, DigitIndex, HouseIndex, HouseIndexer};
+use crate::board::{DigitFlag, SudokuBoard, DigitMask, DigitMaskFromIter};
+use crate::index::{BlockIndex, RowIndex, ColumnIndex, CellIndex, DigitIndex, HouseIndex, HouseIndexer, CellIndexIter};
 use crate::error::SudokuError;
 use crate::display::Highlight;
 
@@ -36,17 +36,55 @@ pub enum Strategy {
     // the block
     LockedCandidateClaiming,
 
-    // three cells in a house have the same up to 3 digits
-    // 
-    // NakedTriple,
+    // three cells in a house have the same up-to 3 digits,
+    // and no other, mean these digits cannot appear in any other
+    // cell within the house
+    NakedTriple,
     // HiddenTriple,
 
-    // NakedQuad,
+    NakedQuad,
     // HiddenQuad,
 }
 
-fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<Highlight>), SudokuError> {
-    let mut board = board;
+fn naked_group(n: usize, board: &mut SudokuBoard, highlights: &mut Vec<Highlight>) {
+    for &house_idx in HouseIndex::domain() {
+        let n_digits: Vec::<_> = board.indexed_house(house_idx).filter_map(|(idx, cell)| {
+            let digits = cell.count_ones();
+            (digits > 1 && digits <= n).then_some(idx)
+        }).collect();
+
+        let groups: Vec<_> = n_digits.into_iter().combinations(n)
+            .filter_map(|indices|{
+                let digits = indices.iter().map(|idx| board[*idx])
+                    .fold(DigitFlag::ZERO, |acc, d| acc | *d);
+                (digits.count_ones() == n).then_some((digits, indices))
+            }).collect();
+
+        for (digits, indices) in groups {
+            let mut changed: bool = false;
+            let mask = DigitMask::new(!digits);
+            for (idx, cell) in board.indexed_house_mut(house_idx) {
+                if indices.contains(&idx) { continue }
+                changed |= cell.apply_mask(&mask);
+            }
+
+            if changed {
+                highlights.push(house_idx.into());
+                for d in digits.iter_ones() {
+                    let d = DigitIndex::from(d);
+                    for idx in indices.iter() {
+                        if board[idx][*d] {
+                            highlights.push((*idx, d).into());
+                        }
+                    }
+                }
+                return // do not process more than one naked group
+            }
+        }
+    }
+}
+
+fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, Vec<Highlight>), SudokuError> {
     let mut highlights = Vec::<Highlight>::new();
     match s {
         Strategy::Primaries => {
@@ -103,7 +141,7 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
                 });
 
                 let single_digits = freq.into_iter().enumerate().filter_map(|(d, f)|{
-                    if f == 1 { Some(DigitIndex::new(d)) } else { None }
+                    (f == 1).then_some(DigitIndex::new(d))
                 }).only();
 
                 for (cell_index, mut cell) in board.indexed_house_mut(house_idx) {
@@ -118,47 +156,8 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
             }
         }
         Strategy::NakedPair => { 
-            // two cells in same region have same two numbers
-            let two_digits: Vec::<_> = board.indexed_iter().filter_map(|(idx, cell)| {
-                if cell.count_ones() == 2 { Some(idx) } else { None }
-            }).collect();
-
-            let naked_pairs: Vec<_> = two_digits.iter().combinations(2)
-                .filter_map(|indices|{
-                    let idx_a = indices[0];
-                    let idx_b = indices[1];
-                    if board[idx_a] == board[idx_b] && idx_a.share_house(idx_b) {
-                        Some((*idx_a, *idx_b))
-                    } else {
-                        None
-                    }
-                }).collect();
-            
-            for (idx_a, idx_b) in naked_pairs {
-                let mut changed = false;
-
-                let mask = DigitMask::new(!*board[idx_a]);
-                for house_idx in idx_a.houses() {
-                    if !house_idx.contains(idx_b) { continue }
-                    for (idx, cell) in board.indexed_house_mut(house_idx) {
-                        if idx == idx_a || idx == idx_b { continue }
-                        if cell.apply_mask(&mask) {
-                            changed = true;
-                            highlights.push(house_idx.into());
-                        }
-                    }
-                }
-
-                if changed {
-                    for d in board[idx_a].iter_ones() {
-                        let d = DigitIndex::from(d);
-                        highlights.push((idx_a, d).into());
-                        highlights.push((idx_b, d).into());
-                    }
-                    break // do not process more than one naked_pair
-                }
-            }
-        }
+            naked_group(2, &mut board, &mut highlights);
+        },
         Strategy::HiddenPair => {
             'outer: for &house_idx in HouseIndex::domain() {
                 // `hidden_pairs_candidates` will yield all the pair of cells within the house
@@ -178,7 +177,7 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
 
                     // get the digits that appear in exactly two cells
                     let digit_two_cells = digit_cells.into_iter().enumerate().filter_map(|(d, which_cells)| {
-                        if which_cells.count_ones() == 2 { Some(DigitIndex::new(d)) } else { None }
+                        (which_cells.count_ones() == 2).then_some(DigitIndex::new(d))
                     });
 
                     // for each digit that contain only two cells, check if there is
@@ -283,6 +282,12 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
                     }
                 }
             }
+        },
+        Strategy::NakedTriple => {
+            naked_group(3, &mut board, &mut highlights);
+        },
+        Strategy::NakedQuad => {
+            naked_group(4, &mut board, &mut highlights);
         },
     };
 
