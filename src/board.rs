@@ -123,6 +123,76 @@ pub type DigitFlag = BitArray<[u16; 1]>;
 pub const ALL_DIGITS_FLAG: DigitFlag = bitarr![const u16, Lsb0; 1, 1, 1, 1, 1, 1, 1, 1, 1];
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub struct DigitMask(DigitFlag);
+
+impl core::default::Default for DigitMask {
+    fn default() -> Self {
+        DigitMask(ALL_DIGITS_FLAG)
+    }
+}
+
+pub trait DigitMaskFromIter {
+    fn all_but(self) -> DigitMask;
+    fn only(self) -> DigitMask;
+}
+
+impl<It> DigitMaskFromIter for It
+where 
+    It: Iterator<Item=DigitIndex>,
+{
+    fn all_but(self) -> DigitMask {
+        let mut flags = ALL_DIGITS_FLAG;
+        for d in self {
+            flags.set(*d, false);
+        }
+        DigitMask(flags)
+    }
+
+    fn only(self) -> DigitMask {
+        let mut flags = DigitFlag::default();
+        for d in self {
+            flags.set(*d, true);
+        }
+        DigitMask(flags)
+    }
+}
+
+impl DigitMask {
+    pub fn new(flags: DigitFlag) -> Self {
+        DigitMask(flags & ALL_DIGITS_FLAG)
+    }
+
+    pub fn all_but(digit: DigitIndex) -> Self {
+        let mut flags = ALL_DIGITS_FLAG;
+        flags.set(*digit, false);
+        DigitMask(flags)
+    }
+
+    pub fn only(digit: DigitIndex) -> Self {
+        let mut flags = DigitFlag::default();
+        flags.set(*digit, true);
+        DigitMask(flags)
+    }
+
+    pub fn add(mut self, digit: DigitIndex) -> Self {
+        self.0.set(*digit, true);
+        self
+    }
+
+    pub fn sub(mut self, digit: DigitIndex) -> Self {
+        self.0.set(*digit, false);
+        self
+    }
+}
+
+impl core::ops::Deref for DigitMask {
+    type Target = DigitFlag;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct SudokuCell(DigitFlag);
 
 impl core::default::Default for SudokuCell {
@@ -154,9 +224,9 @@ impl SudokuCell {
         }
     }
 
-    pub fn apply_mask(&mut self, mask: &DigitFlag) -> bool {
-        if self.0 & *mask != self.0 {
-            self.0 &= *mask;
+    pub fn apply_mask(&mut self, mask: &DigitMask) -> bool {
+        if self.0 & **mask != self.0 {
+            self.0 &= **mask;
             true
         } else {
             false

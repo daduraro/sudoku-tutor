@@ -69,6 +69,8 @@ impl RowIndex {
             RowIndex(6), RowIndex(7), RowIndex(8),
         ]
     }
+
+    pub const COUNT: usize = 9;
 }
 
 impl HouseIndexer for RowIndex {
@@ -113,6 +115,8 @@ impl ColumnIndex {
             ColumnIndex(6), ColumnIndex(7), ColumnIndex(8),
         ]
     }
+
+    pub const COUNT: usize = 9;
 }
 
 impl HouseIndexer for ColumnIndex {
@@ -157,6 +161,8 @@ impl BlockIndex {
             BlockIndex(6), BlockIndex(7), BlockIndex(8),
         ]
     }
+
+    pub const COUNT: usize = 9;
 }
 
 impl HouseIndexer for BlockIndex {

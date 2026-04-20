@@ -97,7 +97,6 @@ impl App {
         let games_titles: Vec<_> = games.iter().enumerate().map(|(idx, game)| {
             let solved = game.is_solved();
             let strats: Vec<_> = game.strategies.iter()
-                .skip(1) // skip InitialPrimaries strategy
                 .collect();
 
             if solved {
@@ -226,7 +225,7 @@ impl App {
             Constraint::Length(1),
         ]).areas(frame.area());
 
-        let filter_size = Strategy::iter().skip(1).fold(0, |acc, s| acc.max(format!("|X {:?} (0000)|", s).len() as u16) );
+        let filter_size = Strategy::iter().fold(0, |acc, s| acc.max(format!("|X {:?} (0000)|", s).len() as u16) );
 
         let [filter_area, games_area] = Layout::horizontal([
             Constraint::Max(filter_size),

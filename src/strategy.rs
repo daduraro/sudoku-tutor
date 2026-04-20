@@ -2,18 +2,15 @@ use itertools::Itertools;
 use strum::{EnumIter, EnumCount};
 use strum::IntoEnumIterator;
 
-use crate::board::{ALL_DIGITS_FLAG, DigitFlag, SudokuBoard};
-use crate::index::{BlockIndex, CellIndex, DigitIndex, HouseIndex, HouseIndexer};
+use crate::board::{ALL_DIGITS_FLAG, DigitFlag, SudokuBoard, DigitMask, DigitMaskFromIter};
+use crate::index::{BlockIndex, RowIndex, ColumnIndex, CellIndex, DigitIndex, HouseIndex, HouseIndexer};
 use crate::error::SudokuError;
 use crate::display::Highlight;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, EnumIter, EnumCount)]
 pub enum Strategy {
     // apply primary strategy of all current primaries at once
-    InitialPrimaries,
-
-    // remove candidates when other cells in their houses have them
-    Primary,
+    Primaries,
 
     // remove other candidates from a cell when a house
     // is the sole owner of a digit
@@ -39,6 +36,8 @@ pub enum Strategy {
     // the block
     LockedCandidateClaiming,
 
+    // three cells in a house have the same up to 3 digits
+    // 
     // NakedTriple,
     // HiddenTriple,
 
@@ -50,40 +49,49 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
     let mut board = board;
     let mut highlights = Vec::<Highlight>::new();
     match s {
-        Strategy::InitialPrimaries | Strategy::Primary => {
+        Strategy::Primaries => {
             let primary_cells: Vec<_> = board.indexed_iter().filter_map(|(cell_idx, cell)| {
                 cell.digit_value().map(move |d| (cell_idx, d))
             }).collect();
 
+            let mut rows_highlight = vec![false; RowIndex::COUNT];
+            let mut columns_highlight = vec![false; ColumnIndex::COUNT];
+            let mut blocks_highlight = vec![false; BlockIndex::COUNT];
             for primary in primary_cells {
                 let (primary_cell_idx, d) = primary;
-                let mut changed = false;
+                let mut relevant_digit = false;
 
-                let mask = {
-                    let mut mask = ALL_DIGITS_FLAG;
-                    mask.set(*d, false);
-                    mask
-                };
-
+                let mask = DigitMask::all_but(d);
                 for h in primary_cell_idx.houses() {
                     for (cell_idx, cell) in board.indexed_house_mut(h) {
                         if cell_idx == primary_cell_idx { continue }
-                        changed |= cell.apply_mask(&mask);
+                        if cell.apply_mask(&mask) {
+                            relevant_digit = true;
+                            match h {
+                                HouseIndex::Block(b) => blocks_highlight[*b] = true,
+                                HouseIndex::Column(c) => columns_highlight[*c] = true,
+                                HouseIndex::Row(r) => rows_highlight[*r] = true,
+                            }
+                        }
                     }
                 }
-
-                if matches!(s, Strategy::Primary) {
-                    if changed {
-                        highlights.push(primary.into());
-                        highlights.push(primary_cell_idx.row().into());
-                        highlights.push(primary_cell_idx.column().into());
-                        highlights.push(primary_cell_idx.block().into());
-                        break
-                    }
-                } else {
-                    highlights.push(Highlight::Digit(primary));
+                if relevant_digit {
+                    highlights.push(primary.into());
                 }
             }
+
+            highlights.extend(
+                rows_highlight.into_iter().enumerate()
+                    .filter_map(|(i, include)| {include.then_some(Highlight::from(HouseIndex::from(RowIndex::new(i))))})
+            );
+            highlights.extend(
+                columns_highlight.into_iter().enumerate()
+                    .filter_map(|(i, include)| {include.then_some(Highlight::from(HouseIndex::from(ColumnIndex::new(i))))})
+            );
+            highlights.extend(
+                blocks_highlight.into_iter().enumerate()
+                    .filter_map(|(i, include)| {include.then_some(Highlight::from(HouseIndex::from(BlockIndex::new(i))))})
+            );
         }
         Strategy::HiddenSingle => {
             'houses: for &house_idx in HouseIndex::domain() {
@@ -94,17 +102,14 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
                     acc
                 });
 
-                let single_digits = {
-                    let mut single_digits = DigitFlag::default();
-                    for (d, f) in freq.into_iter().enumerate() {
-                        single_digits.set(d, f == 1);
-                    }
-                    single_digits
-                };
+                let single_digits = freq.into_iter().enumerate().filter_map(|(d, f)|{
+                    if f == 1 { Some(DigitIndex::new(d)) } else { None }
+                }).only();
+
                 for (cell_index, mut cell) in board.indexed_house_mut(house_idx) {
                     if cell.is_digit() { continue }
-                    if let Some(d) = (**cell & single_digits).first_one() {
-                        cell &= single_digits;
+                    if let Some(d) = (**cell & *single_digits).first_one() {
+                        cell &= *single_digits;
                         highlights.push((cell_index, DigitIndex::new(d)).into());
                         highlights.push(house_idx.into());
                         break 'houses
@@ -132,7 +137,7 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
             for (idx_a, idx_b) in naked_pairs {
                 let mut changed = false;
 
-                let mask = !*board[idx_a];
+                let mask = DigitMask::new(!*board[idx_a]);
                 for house_idx in idx_a.houses() {
                     if !house_idx.contains(idx_b) { continue }
                     for (idx, cell) in board.indexed_house_mut(house_idx) {
@@ -197,13 +202,7 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
                         continue
                     }
 
-                    let mask = {
-                        let mut mask = DigitFlag::default();
-                        mask.set(*d0, true);
-                        mask.set(*d1, true);
-                        mask
-                    };
-
+                    let mask = [d0, d1].into_iter().only();
                     board[cell_idx_a].apply_mask(&mask);
                     board[cell_idx_b].apply_mask(&mask);
 
@@ -242,12 +241,7 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
                         };
                     
                     if let Some((claiming_house, cells)) = claiming_house {
-                        let mask = {
-                            let mut mask = ALL_DIGITS_FLAG;
-                            mask.set(**d, false);
-                            mask
-                        };
-
+                        let mask = DigitMask::all_but(*d);
                         let mut changed = false;
                         for idx in claiming_house.indices() {
                             if &idx.block() == b { continue }
@@ -274,12 +268,7 @@ fn apply_strategy(s: Strategy, board: SudokuBoard) -> Result<(SudokuBoard, Vec<H
                     if cells.is_empty() || !same_block { continue }
                     let block = cells.first().unwrap().block();
                     
-                    let mask = {
-                        let mut mask = ALL_DIGITS_FLAG;
-                        mask.set(**d, false);
-                        mask
-                    };
-
+                    let mask = DigitMask::all_but(*d);
                     let mut changed = false;
                     for idx in block.indices() {
                         if h.contains(idx) { continue }
@@ -319,18 +308,18 @@ pub fn solve(board: SudokuBoard) -> Result<SolvedGame, SudokuError>
     let mut steps = Vec::<(Strategy, Vec<Highlight>)>::new();
     let mut current_board = board;
 
-    // single InitialPrimaries step
-    let (next_board, highlights) = apply_strategy(Strategy::InitialPrimaries, current_board.clone())?;
+    // single Primaries step
+    let (next_board, highlights) = apply_strategy(Strategy::Primaries, current_board.clone())?;
     if next_board != current_board {
         if !current_board.is_valid() { return Err(SudokuError::UnsolvableSudoku) }
         boards.push(current_board);
         current_board = next_board;
-        steps.push((Strategy::InitialPrimaries, highlights));
+        steps.push((Strategy::Primaries, highlights));
     }
 
     while !current_board.is_solved() {
         let mut has_advanced = false;
-        for s in Strategy::iter().skip(1) {
+        for s in Strategy::iter() {
             let (next_board, highlights) = apply_strategy(s, current_board.clone())?;
             if next_board != current_board {
                 if !current_board.is_valid() { return Err(SudokuError::UnsolvableSudoku) }
