@@ -83,6 +83,12 @@ impl FilterStatus {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ExitRequest {
+    Continue,
+    Quit,
+}
+
 #[derive(Debug)]
 struct App {
     screen: AppScreen,
@@ -137,7 +143,7 @@ impl App {
     fn run(mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
         loop {
             terminal.draw(|frame| self.render(frame))?;
-            if !self.handle_input()? { break }
+            if self.handle_input()? == ExitRequest::Quit { break }
         }
         Ok(())
     }
@@ -163,7 +169,7 @@ impl App {
             }).collect();
     }
 
-    fn handle_input(&mut self) -> color_eyre::Result<bool> {
+    fn handle_input(&mut self) -> color_eyre::Result<ExitRequest> {
         if let Some(key) = crossterm::event::read()?.as_key_press_event() {
             match &mut self.screen {
                 AppScreen::GameView(view_state) => {
@@ -184,7 +190,7 @@ impl App {
                     }
                 },
                 AppScreen::GameSelectionView(GameSelectionViewState::Selection) => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(false),
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(ExitRequest::Quit),
                     KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('f') => self.screen = AppScreen::GameSelectionView(GameSelectionViewState::Filter),
                     KeyCode::Char('j') | KeyCode::Down => self.filtered_games_list_state.select_next(),
                     KeyCode::Char('k') | KeyCode::Up => self.filtered_games_list_state.select_previous(),
@@ -196,7 +202,7 @@ impl App {
                     _ => {},
                 },
                 AppScreen::GameSelectionView(GameSelectionViewState::Filter) => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(false),
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(ExitRequest::Quit),
                     KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('f') => self.screen = AppScreen::GameSelectionView(GameSelectionViewState::Selection),
                     KeyCode::Char('j') | KeyCode::Down => self.filtered_strategies_list_state.select_next(),
                     KeyCode::Char('k') | KeyCode::Up => self.filtered_strategies_list_state.select_previous(),
@@ -212,7 +218,7 @@ impl App {
             }
         }
 
-        Ok(true)
+        Ok(ExitRequest::Continue)
     }
 
     fn render(&mut self, frame: &mut Frame) {
@@ -335,7 +341,7 @@ impl App {
 
 }
 
-fn render_load_games_progress(terminal: &mut DefaultTerminal, progress: usize, total: usize) -> color_eyre::Result<bool> {
+fn render_load_games_progress(terminal: &mut DefaultTerminal, progress: usize, total: usize) -> color_eyre::Result<ExitRequest> {
     terminal.draw(|frame| {
         let area = frame.area().centered(
             Constraint::Max(80),
@@ -360,9 +366,9 @@ fn render_load_games_progress(terminal: &mut DefaultTerminal, progress: usize, t
         && let Some(key) = crossterm::event::read()?.as_key_press_event()
         && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) 
     {
-        Ok(false)
+        Ok(ExitRequest::Quit)
     } else {
-        Ok(true)
+        Ok(ExitRequest::Continue)
     }
 }
 
@@ -389,7 +395,7 @@ fn load_games(terminal: &mut DefaultTerminal, file_paths: &[PathBuf], sequential
                 if let Ok(g) = solve(g) {
                     solved_games.push(g)
                 }
-                if !render_load_games_progress(terminal, i, total)? {
+                if render_load_games_progress(terminal, i, total)? == ExitRequest::Quit {
                     return Ok(None)
                 }
 
@@ -415,7 +421,7 @@ fn load_games(terminal: &mut DefaultTerminal, file_paths: &[PathBuf], sequential
                     break games.clone()
                 }
 
-                if !render_load_games_progress(terminal, progress.get(), total)? {
+                if render_load_games_progress(terminal, progress.get(), total)? == ExitRequest::Quit {
                     return Ok(None)
                 }
             }
