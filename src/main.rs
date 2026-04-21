@@ -29,6 +29,9 @@ struct Cli {
     #[arg(value_name="FILE", required=true, num_args=1..)]
     games: Vec<PathBuf>,
 
+    #[arg(short, long, action = clap::ArgAction::SetTrue)]
+    sequential: bool,
+
     #[arg(short, long, action = clap::ArgAction::Count)]
     debug: u8,
 }
@@ -332,7 +335,38 @@ impl App {
 
 }
 
-fn load_games(terminal: &mut DefaultTerminal, file_paths: &[PathBuf]) -> color_eyre::Result<Option<Vec<SolvedGame>>> {
+fn render_load_games_progress(terminal: &mut DefaultTerminal, progress: usize, total: usize) -> color_eyre::Result<bool> {
+    terminal.draw(|frame| {
+        let area = frame.area().centered(
+            Constraint::Max(80),
+            Constraint::Max(6),
+        );
+        let [gauge_area, text_area] = Layout::vertical([
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+
+        frame.render_widget("Press 'q' or ESC to exit...", text_area);
+
+        let gauge = Gauge::default()
+            .block(Block::bordered().title(format!("Solving games {}/{}", progress, total)))
+            .gauge_style(Style::new().white().on_black().italic())
+            .ratio(progress as f64 / total as f64);
+        frame.render_widget(gauge, gauge_area);
+    })?;
+
+    if crossterm::event::poll(std::time::Duration::from_secs(0))?
+        && let Some(key) = crossterm::event::read()?.as_key_press_event()
+        && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) 
+    {
+        Ok(false)
+    } else {
+        Ok(true)
+    }
+}
+
+fn load_games(terminal: &mut DefaultTerminal, file_paths: &[PathBuf], sequential: bool) -> color_eyre::Result<Option<Vec<SolvedGame>>> {
     let games = {
         let mut games = Vec::<SudokuBoard>::new();
         for fpath in file_paths {
@@ -340,58 +374,52 @@ fn load_games(terminal: &mut DefaultTerminal, file_paths: &[PathBuf]) -> color_e
             let reader = std::io::BufReader::new(reader);
             games.extend(crate::io::load_games(Box::new(reader)))
         }
+        // games = vec![games.into_iter().nth(4).unwrap()];
         games
     };
 
     if games.is_empty() { return Err(SudokuError::NoBoardFound.into()); }
 
-    // solve the games
-    let it = rayon_progress::ProgressAdaptor::new(games);
-    let result = Arc::new(Mutex::default());
-    let progress = it.items_processed();
-    let total = it.len();
-    rayon::spawn({
-        let result = result.clone();
-        move || {
-            let games: Vec::<_> = it.filter_map(|b| solve(b).ok() ).collect();
-            *result.lock().unwrap() = Some(games);
-        }
-    });
+    let total = games.len();
+    let games = 
+        if sequential {
+            let mut solved_games = Vec::new();
 
-    let games: Vec<_> = loop {
-        // check if job is done
-        if let Ok(v) = result.try_lock() && let Some(games) = &*v {
-            break games.clone()
-        }
+            for (i, g) in games.into_iter().enumerate() {
+                if let Ok(g) = solve(g) {
+                    solved_games.push(g)
+                }
+                if !render_load_games_progress(terminal, i, total)? {
+                    return Ok(None)
+                }
 
-        // 
-        terminal.draw(|frame| {
-            let area = frame.area().centered(
-                Constraint::Max(80),
-                Constraint::Max(6),
-            );
-            let [gauge_area, text_area] = Layout::vertical([
-                Constraint::Min(3),
-                Constraint::Length(1),
-            ])
-            .areas(area);
+            }
 
-            frame.render_widget("Press 'q' or ESC to exit...", text_area);
+            solved_games
+        } else {
+            let it = rayon_progress::ProgressAdaptor::new(games);
+            let result = Arc::new(Mutex::default());
+            let progress = it.items_processed();
+            let total = it.len();
+            rayon::spawn({
+                let result = result.clone();
+                move || {
+                    let games: Vec::<_> = it.filter_map(|b| solve(b).ok() ).collect();
+                    *result.lock().unwrap() = Some(games);
+                }
+            });
 
-            let gauge = Gauge::default()
-                .block(Block::bordered().title(format!("Solving games {}/{}", progress.get(), total)))
-                .gauge_style(Style::new().white().on_black().italic())
-                .ratio(progress.get() as f64 / total as f64);
-            frame.render_widget(gauge, gauge_area);
-        })?;
+            loop {
+                // check if job is done
+                if let Ok(v) = result.try_lock() && let Some(games) = &*v {
+                    break games.clone()
+                }
 
-        if crossterm::event::poll(std::time::Duration::from_secs(0))?
-            && let Some(key) = crossterm::event::read()?.as_key_press_event()
-            && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) 
-        {
-            return Ok(None)
-        }
-    };
+                if !render_load_games_progress(terminal, progress.get(), total)? {
+                    return Ok(None)
+                }
+            }
+        };
 
     if games.is_empty() {
         return Err(SudokuError::NoBoardFound.into())
@@ -403,7 +431,7 @@ fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
     ratatui::run(|term| {
         let cli = Cli::parse();
-        if let Some(games) = load_games(term, &cli.games)? {
+        if let Some(games) = load_games(term, &cli.games, cli.sequential)? {
             App::new(games).run(term)?
         }
         Ok(())

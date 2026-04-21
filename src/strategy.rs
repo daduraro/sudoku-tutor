@@ -3,7 +3,7 @@ use strum::{EnumIter, EnumCount};
 use strum::IntoEnumIterator;
 
 use crate::board::{SudokuFlags, SudokuBoard, DigitMask, DigitMaskFromIter};
-use crate::index::{BlockIndex, RowIndex, ColumnIndex, CellIndex, DigitIndex, HouseIndex, HouseIndexer, CellIndexIter};
+use crate::index::{BlockIndex, RowIndex, ColumnIndex, CellIndex, DigitIndex, HouseIndex, HouseIndexer};
 use crate::error::SudokuError;
 use crate::display::Highlight;
 
@@ -36,31 +36,36 @@ pub enum Strategy {
     // the block
     LockedCandidateClaiming,
 
-    // three cells in a house have the same up-to 3 digits,
-    // and no other, mean these digits cannot appear in any other
-    // cell within the house
     NakedTriple,
-    // HiddenTriple,
-
+    HiddenTriple,
     NakedQuad,
-    // HiddenQuad,
+    HiddenQuad,
+
+    // XWing,
+    // RemotePair,
+    // ChuteRemotePair,
+    // ColoringType1,
+    // ColoringType2,
+    // 
+
 }
 
 fn naked_group(n: usize, board: &mut SudokuBoard, highlights: &mut Vec<Highlight>) {
+    assert!(1 < n && n < 9);
     for &house_idx in HouseIndex::domain() {
-        let n_digits: Vec::<_> = board.indexed_house(house_idx).filter_map(|(idx, cell)| {
+        let candidate_cells: Vec::<_> = board.indexed_house(house_idx).filter_map(|(idx, cell)| {
             let digits = cell.num_digits();
             (digits > 1 && digits <= n).then_some(idx)
         }).collect();
 
-        let groups: Vec<_> = n_digits.into_iter().combinations(n)
+        let candidate_groups: Vec<_> = candidate_cells.into_iter().combinations(n)
             .filter_map(|indices|{
                 let digits = indices.iter().map(|idx| board[*idx])
                     .fold(SudokuFlags::ZERO, |acc, d| acc | d.digits());
                 (digits.count_ones() == n).then_some((digits, indices))
             }).collect();
 
-        for (digits, indices) in groups {
+        for (digits, indices) in candidate_groups {
             let mut changed: bool = false;
             let mask = DigitMask::new(!digits);
             for (idx, cell) in board.indexed_house_mut(house_idx) {
@@ -79,6 +84,75 @@ fn naked_group(n: usize, board: &mut SudokuBoard, highlights: &mut Vec<Highlight
                     }
                 }
                 return // do not process more than one naked group
+            }
+        }
+    }
+}
+
+fn hidden_group(n: usize, board: &mut SudokuBoard, highlights: &mut Vec<Highlight>) {
+    assert!(n < 9);
+    for &house_idx in HouseIndex::domain() {
+        let candidates = {
+            
+            // for each digit, get which cells in the house contain them
+            let digit_cells = {
+                let mut digit_cells = [SudokuFlags::default(); DigitIndex::COUNT];
+                for (idx, cell) in board.house(house_idx).enumerate() {
+                    for &d in DigitIndex::domain() {
+                        digit_cells[d.value()].set(idx, cell.contains(d))
+                    }
+                }
+                digit_cells
+            };
+
+            // Filter out digits that are not possible as they appear in more than n cells or they belong
+            // to an already set cell (i.e. cell with a single digit).
+            // Neither condition is strictly necessary, but they will reduce the search space.
+            let digit_cells: Vec<_> = digit_cells.into_iter().enumerate()
+                .filter(|(_, which_cells)| {
+                    (which_cells.count_ones() <= n) && which_cells.iter_ones().all(|i| !board[house_idx.cell_index(i)].is_digit())
+                })
+                .map(|(d, which_cells)| {
+                    let mut flags = SudokuFlags::ZERO;
+                    flags.set(d, true);
+                    (flags, which_cells)
+                }).collect();
+
+            if digit_cells.len() < n { continue }
+
+            // merge cells into cell groups (n-1) times, so that we get all the hidden groups
+            let mut candidates = vec![ (SudokuFlags::ZERO, SudokuFlags::ZERO) ];
+            for _ in 0..n {
+                candidates = candidates.into_iter().flat_map(|(digits, cells)|{
+                    digit_cells.iter().filter_map(move |(d, c)|{
+                        let new_digit = (digits & d) == SudokuFlags::ZERO;
+                        let compatible = (cells | c).count_ones() <= n;
+                        (new_digit && compatible).then_some((digits | d, cells | c))
+                    })
+                }).collect();
+            }
+            candidates
+        };
+
+        for (digits, cells) in candidates {
+            let mask = DigitMask::new(digits);
+            let mut changed = false;
+            for cell_idx in cells.iter_ones() {
+                let cell_idx = house_idx.cell_index(cell_idx);
+                changed |= board[cell_idx].apply_mask(&mask);
+            }
+
+            if changed {
+                highlights.push(house_idx.into());
+                for d in digits.iter_ones() {
+                    let d = DigitIndex::new(d);
+                    for cell_idx in cells.iter_ones() {
+                        let cell_idx = house_idx.cell_index(cell_idx);
+                        highlights.push((cell_idx, d).into());
+                    }
+                }
+
+                return // do not process more than one hidden group
             }
         }
     }
@@ -119,101 +193,26 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
             }
 
             highlights.extend(
-                rows_highlight.into_iter().enumerate()
-                    .filter_map(|(i, include)| {include.then_some(Highlight::from(HouseIndex::from(RowIndex::new(i))))})
+                rows_highlight.iter_ones()
+                    .map(|i| { Highlight::from(HouseIndex::from(RowIndex::new(i))) })
             );
             highlights.extend(
-                columns_highlight.into_iter().enumerate()
-                    .filter_map(|(i, include)| {include.then_some(Highlight::from(HouseIndex::from(ColumnIndex::new(i))))})
+                columns_highlight.iter_ones()
+                    .map(|i| { Highlight::from(HouseIndex::from(ColumnIndex::new(i))) })
             );
             highlights.extend(
-                blocks_highlight.into_iter().enumerate()
-                    .filter_map(|(i, include)| {include.then_some(Highlight::from(HouseIndex::from(BlockIndex::new(i))))})
+                blocks_highlight.iter_ones()
+                    .map(|i| { Highlight::from(HouseIndex::from(BlockIndex::new(i))) })
             );
         }
         Strategy::HiddenSingle => {
-            'houses: for &house_idx in HouseIndex::domain() {
-                let freq: Vec<u8> = board.house(house_idx).fold(vec![0; DigitIndex::domain().len()], |mut acc, c| {
-                    for &d in DigitIndex::domain() {
-                        if c.contains(d) { acc[d.value()] += 1; }
-                    }
-                    acc
-                });
-
-                let single_digits = freq.into_iter().enumerate().filter_map(|(d, f)|{
-                    (f == 1).then_some(DigitIndex::new(d))
-                }).only();
-
-                for (cell_index, mut cell) in board.indexed_house_mut(house_idx) {
-                    if cell.is_digit() { continue }
-                    if let Some(d) = (cell.digits() & single_digits.value()).first_one() {
-                        cell &= single_digits;
-                        highlights.push((cell_index, DigitIndex::new(d)).into());
-                        highlights.push(house_idx.into());
-                        break 'houses
-                    }
-                }
-            }
+            hidden_group(1, &mut board, &mut highlights)
         }
         Strategy::NakedPair => { 
             naked_group(2, &mut board, &mut highlights);
         },
         Strategy::HiddenPair => {
-            'outer: for &house_idx in HouseIndex::domain() {
-                // `hidden_pairs_candidates` will yield all the pair of cells within the house
-                // that are the only ones to contain two particular digits.
-                // These will include naked pairs, which we will filter out later.
-                let hidden_pairs_candidates = {
-                    // for each digit, get which cells in the house contain them
-                    let digit_cells = {
-                        let mut digit_cells = [SudokuFlags::default(); 9];
-                        for (idx, cell) in board.house(house_idx).enumerate() {
-                            for &d in DigitIndex::domain() {
-                                digit_cells[d.value()].set(idx, cell.contains(d))
-                            }
-                        }
-                        digit_cells
-                    };
-
-                    // get the digits that appear in exactly two cells
-                    let digit_two_cells = digit_cells.into_iter().enumerate().filter_map(|(d, which_cells)| {
-                        (which_cells.count_ones() == 2).then_some(DigitIndex::new(d))
-                    });
-
-                    // for each digit that contain only two cells, check if there is
-                    // another digit with the same two cells
-                    digit_two_cells.combinations(2).filter_map(move |digits|{
-                        let digit_a = digits[0];
-                        let digit_b = digits[1];
-
-                        if digit_cells[digit_a.value()] == digit_cells[digit_b.value()] {
-                            let indices: [usize; 2] = digit_cells[digit_a.value()].iter_ones().collect_array().unwrap();
-                            Some((digit_a, digit_b, house_idx.cell_index(indices[0]), house_idx.cell_index(indices[1])))
-                        } else {
-                            None
-                        }
-                    })
-                };
-
-                for (d0, d1, cell_idx_a, cell_idx_b) in hidden_pairs_candidates {
-                    // check if they are a naked pair, instead of a hidden one
-                    if board[cell_idx_a].num_digits() == 2 && board[cell_idx_b].num_digits() == 2 {
-                        continue
-                    }
-
-                    let mask = [d0, d1].into_iter().only();
-                    board[cell_idx_a].apply_mask(&mask);
-                    board[cell_idx_b].apply_mask(&mask);
-
-                    highlights.push(house_idx.into());
-                    highlights.push((cell_idx_a, d0).into());
-                    highlights.push((cell_idx_a, d1).into());
-                    highlights.push((cell_idx_b, d0).into());
-                    highlights.push((cell_idx_b, d1).into());
-
-                    break 'outer // do not process more than one hidden pair
-                }
-            }
+            hidden_group(2, &mut board, &mut highlights);
         },
         Strategy::LockedCandidatePointing => {
             'outer: for b in BlockIndex::domain() {
@@ -286,9 +285,16 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
         Strategy::NakedTriple => {
             naked_group(3, &mut board, &mut highlights);
         },
+        Strategy::HiddenTriple => {
+            hidden_group(3, &mut board, &mut highlights);
+        },
         Strategy::NakedQuad => {
             naked_group(4, &mut board, &mut highlights);
         },
+        Strategy::HiddenQuad => {
+            hidden_group(4, &mut board, &mut highlights);
+        },
+
     };
 
     Ok((board, highlights))

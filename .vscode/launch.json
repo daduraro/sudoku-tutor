@@ -11,7 +11,8 @@
                 ]
             },
             "args": [
-                "./data/hard.opensudoku.xml"
+                "./data/hard.opensudoku.xml",
+                "--sequential"
             ]
         }
     
