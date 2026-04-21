@@ -59,9 +59,9 @@ fn render_cell(
             if striked.contains(&(cell_idx, *d)) {
                 Span::styled(String::from(char::from(*d)), Style::default().red().crossed_out())
             } else if circled.contains(&(cell_idx, *d)) {
-                let ch = char::from_u32(('①' as u32) + (**d as u32)).unwrap_or('�');
+                let ch = char::from_u32(('①' as u32) + (d.value() as u32)).unwrap_or('�');
                 Span::styled(String::from(ch), Style::default().blue())
-            } else if board[cell_idx][**d] {
+            } else if board[cell_idx].contains(*d) {
                 Span::from(String::from(char::from(*d)))
             } else {
                 Span::from(" ")
@@ -132,22 +132,22 @@ fn render_sudoku_highlights(
         if let Highlight::House(house) = h {
             let highlight_area = match house {
                 HouseIndex::Block(b) => {
-                    let topleft = b.index(0);
+                    let topleft = b.cell_index(0);
                     area.resize(Size::new(7*3 + 2, 3*3 + 2))
                         .offset(Offset::new(1, 1))
-                        .offset(Offset::new(8 * (*topleft.column() as i32), 4 * (*topleft.row() as i32)))
+                        .offset(Offset::new(8 * (topleft.column().value() as i32), 4 * (topleft.row().value() as i32)))
                         .intersection(area)
                 },
                 HouseIndex::Row(r) => {
                     area.resize(Size::new(7*9 + 8, 3))
                         .offset(Offset::new(1, 1))
-                        .offset(Offset::new(0, 4 * (**r as i32)))
+                        .offset(Offset::new(0, 4 * (r.value() as i32)))
                         .intersection(area)
                 },
                 HouseIndex::Column(c) => {
                     area.resize(Size::new(7, 3*9 + 8))
                         .offset(Offset::new(1, 1))
-                        .offset(Offset::new(8 * (**c as i32), 0))
+                        .offset(Offset::new(8 * (c.value() as i32), 0))
                         .intersection(area)
                 },
             };
@@ -175,12 +175,10 @@ pub fn render_sudoku_board(
             None
         }
     }).cloned().collect();
-    for cell_idx in 0..81 {
-        let cell_idx = CellIndex::from(cell_idx);
-
+    for cell_idx in CellIndex::domain() {
         let cell_area = area.resize(Size::new(7, 3))
             .offset(Offset::new(1, 1))
-            .offset(Offset::new(8 * (*cell_idx.column() as i32), 4 * (*cell_idx.row() as i32)))
+            .offset(Offset::new(8 * (cell_idx.column().value() as i32), 4 * (cell_idx.row().value() as i32)))
             .intersection(area)
             ;
         render_cell(board, cell_idx, frame, cell_area, &circled, striked);

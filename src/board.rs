@@ -1,16 +1,17 @@
 use std::iter::zip;
 
 use bitvec::{bitarr, array::BitArray, order::Lsb0};
+use itertools::Itertools;
 
 use crate::error::SudokuError;
-use crate::index::{CellIndex, HouseIndex, HouseIndexer, DigitIndex, SudokuSubCellIndex};
+use crate::index::{CellIndex, DigitIndex, HouseIndex, HouseIndexer, SudokuSubCellIndex};
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct SudokuBoard(Vec<SudokuCell>);
 
 impl SudokuBoard {
     pub fn new(data: Vec<SudokuCell>) -> Result<Self, SudokuError> {
-        if data.len() == 9*9 {
+        if data.len() == CellIndex::COUNT {
             Ok(SudokuBoard(data))
         } else {
             Err(SudokuError::InvalidBoardSize(data.len()))
@@ -18,31 +19,33 @@ impl SudokuBoard {
     }
 
     pub fn house<Idx: HouseIndexer>(&self, idx: Idx) -> impl Iterator<Item=&SudokuCell> {
-        idx.indices().into_iter()
+        idx.cell_indices().into_iter()
             .map(|cell_idx: CellIndex| &self[cell_idx])
     }
     pub fn house_mut<Idx: HouseIndexer>(&mut self, idx: Idx) -> impl Iterator<Item=&mut SudokuCell> {
+        debug_assert!(idx.flat_indices().iter().all_unique());
         let ptr = self.0.as_mut_ptr();
-        idx.indices().into_iter()
-            .map(move |cell_idx| unsafe { &mut *ptr.add(cell_idx.flat()) })
+        idx.flat_indices().into_iter()
+            .map(move |offset| unsafe { &mut *ptr.add(offset) })
     }
     pub fn indexed_house<Idx: HouseIndexer>(&self, idx: Idx) -> impl Iterator<Item=(CellIndex, &SudokuCell)> {
-        idx.indices().into_iter()
+        idx.cell_indices().into_iter()
             .map(move |cell_idx| (cell_idx, &self[cell_idx]))
     }
     pub fn indexed_house_mut<Idx: HouseIndexer>(&mut self, idx: Idx) -> impl Iterator<Item=(CellIndex, &mut SudokuCell)> {
+        debug_assert!(idx.cell_indices().iter().map(CellIndex::flat).all_unique());
         let ptr = self.0.as_mut_ptr();
-        idx.indices().into_iter()
+        idx.cell_indices().into_iter()
             .map(move |cell_idx| (cell_idx, unsafe { &mut *ptr.add(cell_idx.flat()) }))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &SudokuCell> { self.0.iter() }
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut SudokuCell> { self.0.iter_mut() }
     pub fn indexed_iter(&self) -> impl Iterator<Item = (CellIndex, &SudokuCell)> {
-        self.0.iter().enumerate().map(|(i, cell)| (CellIndex::from(i), cell))
+        self.0.iter().enumerate().map(|(i, cell)| (CellIndex::from_flat(i), cell))
     }
     pub fn indexed_iter_mut(&mut self) -> impl Iterator<Item = (CellIndex, &mut SudokuCell)> {
-        self.0.iter_mut().enumerate().map(|(i, cell)| (CellIndex::from(i), cell))
+        self.0.iter_mut().enumerate().map(|(i, cell)| (CellIndex::from_flat(i), cell))
     }
 
     pub fn is_valid(&self) -> bool {
@@ -50,9 +53,9 @@ impl SudokuBoard {
     }
     pub fn is_solved(&self) -> bool {
         HouseIndex::domain().iter().all(|h|{
-            self.house(*h).fold(DigitFlag::default(), |mut acc, c| {
+            self.house(*h).fold(SudokuFlags::default(), |mut acc, c| {
                 if let Some(d) = c.digit_value() {
-                    acc.set(*d, true)
+                    acc.set(d.value(), true)
                 }
                 acc
             }).count_ones() == 9
@@ -62,7 +65,8 @@ impl SudokuBoard {
     pub fn diff(&self, prev: &SudokuBoard) -> Vec<SudokuSubCellIndex> {
         zip(self.indexed_iter(), prev).flat_map(|((cell_idx, curr), prev)| {
             DigitIndex::domain().iter().cloned().filter_map(move |d| {
-                if curr[d] ^ prev[d] { Some((cell_idx, d)) } else { None }
+                let has_diff = curr.contains(d) ^ prev.contains(d);
+                has_diff.then_some((cell_idx, d))
             })
         }).collect()
     }
@@ -119,15 +123,48 @@ impl core::ops::IndexMut<&CellIndex> for SudokuBoard {
     }
 }
 
-pub type DigitFlag = BitArray<[u16; 1]>;
-pub const ALL_DIGITS_FLAG: DigitFlag = bitarr![const u16, Lsb0; 1, 1, 1, 1, 1, 1, 1, 1, 1];
+pub type SudokuFlags = BitArray<[u16; 1]>;
+pub const SUDOKU_FLAG_ALL: SudokuFlags = bitarr![const u16, Lsb0; 1, 1, 1, 1, 1, 1, 1, 1, 1];
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub struct DigitMask(DigitFlag);
+pub struct DigitMask(SudokuFlags);
+
+impl DigitMask {
+    pub fn new(flags: SudokuFlags) -> Self {
+        DigitMask(flags & SUDOKU_FLAG_ALL)
+    }
+
+    pub fn all_but(digit: DigitIndex) -> Self {
+        let mut flags = SUDOKU_FLAG_ALL;
+        flags.set(digit.value(), false);
+        DigitMask(flags)
+    }
+
+    pub fn only(digit: DigitIndex) -> Self {
+        let mut flags = SudokuFlags::default();
+        flags.set(digit.value(), true);
+        DigitMask(flags)
+    }
+
+    pub fn add(mut self, digit: DigitIndex) -> Self {
+        self.0.set(digit.value(), true);
+        self
+    }
+
+    pub fn sub(mut self, digit: DigitIndex) -> Self {
+        self.0.set(digit.value(), false);
+        self
+    }
+
+    pub fn value(&self) -> SudokuFlags {
+        self.0
+    }
+}
+
 
 impl core::default::Default for DigitMask {
     fn default() -> Self {
-        DigitMask(ALL_DIGITS_FLAG)
+        DigitMask(SUDOKU_FLAG_ALL)
     }
 }
 
@@ -141,70 +178,42 @@ where
     It: Iterator<Item=DigitIndex>,
 {
     fn all_but(self) -> DigitMask {
-        let mut flags = ALL_DIGITS_FLAG;
+        let mut flags = SUDOKU_FLAG_ALL;
         for d in self {
-            flags.set(*d, false);
+            flags.set(d.value(), false);
         }
         DigitMask(flags)
     }
 
     fn only(self) -> DigitMask {
-        let mut flags = DigitFlag::default();
+        let mut flags = SudokuFlags::default();
         for d in self {
-            flags.set(*d, true);
+            flags.set(d.value(), true);
         }
         DigitMask(flags)
     }
 }
 
-impl DigitMask {
-    pub fn new(flags: DigitFlag) -> Self {
-        DigitMask(flags & ALL_DIGITS_FLAG)
-    }
-
-    pub fn all_but(digit: DigitIndex) -> Self {
-        let mut flags = ALL_DIGITS_FLAG;
-        flags.set(*digit, false);
-        DigitMask(flags)
-    }
-
-    pub fn only(digit: DigitIndex) -> Self {
-        let mut flags = DigitFlag::default();
-        flags.set(*digit, true);
-        DigitMask(flags)
-    }
-
-    pub fn add(mut self, digit: DigitIndex) -> Self {
-        self.0.set(*digit, true);
-        self
-    }
-
-    pub fn sub(mut self, digit: DigitIndex) -> Self {
-        self.0.set(*digit, false);
-        self
-    }
-}
-
-impl core::ops::Deref for DigitMask {
-    type Target = DigitFlag;
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl core::ops::Index<DigitIndex> for DigitMask {
+    type Output = bool;
+    fn index(&self, index: DigitIndex) -> &Self::Output {
+        &self.0[index.value()]
     }
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub struct SudokuCell(DigitFlag);
+pub struct SudokuCell(SudokuFlags);
 
 impl core::default::Default for SudokuCell {
     fn default() -> Self {
-        SudokuCell(ALL_DIGITS_FLAG)
+        SudokuCell(SUDOKU_FLAG_ALL)
     }
 }
 
 impl SudokuCell {
     pub fn digit(d: DigitIndex) -> Self {
-        let mut v = DigitFlag::ZERO;
-        v.set(*d, true);
+        let mut v = SudokuFlags::ZERO;
+        v.set(d.value(), true);
         SudokuCell(v)
     }
 
@@ -218,30 +227,31 @@ impl SudokuCell {
 
     pub fn digit_value(&self) -> Option<DigitIndex> {
         if self.is_digit() {
-            self.0.first_one().map(DigitIndex::new)
+            self.0.first_one().map(|i| DigitIndex::new(i))
         } else {
             None
         }
     }
 
+    pub fn num_digits(&self) -> usize {
+        self.0.count_ones()
+    }
+
     pub fn apply_mask(&mut self, mask: &DigitMask) -> bool {
-        if self.0 & **mask != self.0 {
-            self.0 &= **mask;
+        if self.0 & mask.value() != self.0 {
+            self.0 &= mask.value();
             true
         } else {
             false
         }
     }
 
-    pub fn contains(&self, d: &DigitIndex) -> bool {
-        self[*d]
+    pub fn contains(&self, d: DigitIndex) -> bool {
+        self.0[d.value()]
     }
-}
 
-impl core::ops::Index<DigitIndex> for &SudokuCell {
-    type Output = bool;
-    fn index(&self, index: DigitIndex) -> &Self::Output {
-        &self.0[*index]
+    pub fn digits(&self) -> SudokuFlags {
+        self.0
     }
 }
 
@@ -262,36 +272,16 @@ impl core::convert::TryFrom<char> for SudokuCell {
 impl core::convert::From<&SudokuCell> for char {
     fn from(value: &SudokuCell) -> Self {
         if let Some(d) = value.digit_value() {
-            char::from(d)
+            char::from_digit((d.value() + 1) as u32, 10).unwrap()
         } else {
             '0'
         }
     }
 }
 
-impl core::ops::BitAndAssign<DigitFlag> for &mut SudokuCell {
-    fn bitand_assign(&mut self, rhs: DigitFlag) {
-        self.0 &= rhs
-    }
-}
-
-impl core::convert::From<DigitIndex> for char {
-    fn from(value: DigitIndex) -> Self {
-        char::from(&value)
-    }
-}
-
-impl core::convert::From<&DigitIndex> for char {
-    fn from(value: &DigitIndex) -> Self {
-        char::from_digit((**value + 1) as u32, 10).unwrap()
-    }
-}
-
-impl core::ops::Deref for SudokuCell {
-    type Target = DigitFlag;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0   
+impl core::ops::BitAndAssign<DigitMask> for &mut SudokuCell {
+    fn bitand_assign(&mut self, rhs: DigitMask) {
+        self.0 &= rhs.value()
     }
 }
 
