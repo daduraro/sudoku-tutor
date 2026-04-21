@@ -247,7 +247,7 @@ impl App {
             ;
 
         let game_list_title = if self.filtered_games_indices.len() == self.games.len() {
-            "Games".to_owned()
+            format!("Games ({})", self.games.len())
         } else {
             format!("Games ({}/{})", self.filtered_games_indices.len(), self.games.len())
         };
