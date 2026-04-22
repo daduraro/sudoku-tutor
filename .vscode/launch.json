@@ -11,7 +11,7 @@
                 ]
             },
             "args": [
-                "./data/hard.opensudoku.xml",
+                "./data/sudocue_top50000.sdm",
                 "--sequential"
             ]
         }

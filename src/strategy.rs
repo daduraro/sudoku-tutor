@@ -1,11 +1,36 @@
+use std::collections::VecDeque;
+
 use itertools::Itertools;
 use strum::{EnumIter, EnumCount};
 use strum::IntoEnumIterator;
+use ena::unify::{UnifyKey, InPlaceUnificationTable};
 
 use crate::board::{SudokuFlags, SudokuBoard, DigitMask, DigitMaskFromIter};
 use crate::index::{BlockIndex, RowIndex, ColumnIndex, CellIndex, DigitIndex, HouseIndex, HouseIndexer};
 use crate::error::SudokuError;
 use crate::display::Highlight;
+
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+enum RedBlack {
+    Red,
+    Black,
+}
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct IntKey(u32);
+
+impl UnifyKey for IntKey {
+    type Value = ();
+    fn index(&self) -> u32 {
+        self.0
+    }
+    fn from_index(u: u32) -> IntKey {
+        IntKey(u)
+    }
+    fn tag() -> &'static str {
+        "IntKey"
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, EnumIter, EnumCount)]
 pub enum Strategy {
@@ -47,7 +72,13 @@ pub enum Strategy {
     // in the rest of the column/row as they are locked to that row/column
     XWing,
 
-    // RemotePair,
+    // Cells with exactly same two candidates may form a link of locked/complementary pairs.
+    // In particular, this chain link will make pairs in an odd distance to
+    // be locked pairs themselves, and so any cell that sees both cannot have
+    // either candidate.
+    RemotePair,
+
+
     // ChuteRemotePair,
     // ColoringType1,
     // ColoringType2,
@@ -153,7 +184,9 @@ fn hidden_group(n: usize, board: &mut SudokuBoard, highlights: &mut Vec<Highligh
                     let d = DigitIndex::new(d);
                     for cell_idx in cells.iter_ones() {
                         let cell_idx = house_idx.cell_index(cell_idx);
-                        highlights.push((cell_idx, d).into());
+                        if board[cell_idx].contains(d) {
+                            highlights.push((cell_idx, d).into());
+                        }
                     }
                 }
 
@@ -346,7 +379,119 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
                 }
             }
         },
+        Strategy::RemotePair => {
+            let bv_cells: Vec<_> = CellIndex::domain().filter(|idx| board[idx].num_digits() == 2)
+                .into_group_map_by(|idx| board[idx].digits())
+                .into_iter()
+                .filter(|(_, v)| v.len() >= 3)
+                .collect()
+                ;
+            'strategy: for (digits, cells) in bv_cells {
+                let mut graph: Vec<Vec<usize>> = vec![Vec::new(); cells.len()];
+                let mut ut = InPlaceUnificationTable::<IntKey>::new();
+                let keys: Vec<_> = cells.iter().map(|_| ut.new_key(())).collect();
+                for i in 0..cells.len() {
+                    for j in (i+1)..cells.len() {
+                        if cells[i].share_house(&cells[j]) {
+                            ut.union(keys[i], keys[j]);
+                            graph[i].push(j);
+                            graph[j].push(i);
+                        }
+                    }
+                }
 
+                let mut processed_groups = Vec::new();
+                for key in keys {
+                    let root = ut.find(key);
+                    if processed_groups.contains(&root) { continue }
+                    processed_groups.push(root);
+
+                    let root = root.index() as usize;
+
+                    // coloring the cells starting from root
+                    let mut red_group = Vec::new();
+                    let mut black_group = Vec::new();
+                    
+                    let mut visited = vec![false; cells.len()];
+                    let mut stack = vec![(0usize, root)];
+                    while let Some((dist, idx)) = stack.pop() {
+                        if visited[idx] { continue }
+                        visited[idx] = true;
+
+                        if dist.is_multiple_of(2) {
+                            red_group.push(idx);
+                        } else {
+                            black_group.push(idx);
+                        }
+                        for &other in graph[idx].iter() {
+                            stack.push((dist + 1, other));
+                        }
+                    }
+
+                    // all cells in red_group are locked pairs
+                    // all cells in black_group are locked pairs
+                    // check for each pair in red_group and pair in black_group, whether
+                    // there is a cell which is visible to both of them and contain
+                    // the digits
+                    let mask = DigitMask::new(!digits);
+                    for pairs in red_group.iter().combinations(2).chain(black_group.iter().combinations(2)) {
+                        let c0 = cells[*pairs[0]];
+                        let c1 = cells[*pairs[1]];
+                        
+                        let mut changed_cells = Vec::new();
+                        for c in c0.visible_with(&c1) {
+                            if board[c].would_change(&mask) {
+                                changed_cells.push(c);
+                            }
+                        }
+
+                        if !changed_cells.is_empty() {
+                            for c in changed_cells.iter() {
+                                board[c].apply_mask(&mask);
+                            //     highlights.extend(
+                            //         c.shared_houses(&c0).into_iter().map(Highlight::from)
+                            //     );
+                            //     highlights.extend(
+                            //         c.shared_houses(&c1).into_iter().map(Highlight::from)
+                            //     );
+                            }
+                            for d in digits.iter_ones() {
+                                let d = DigitIndex::new(d);
+                                highlights.push((c0, d).into());
+                                highlights.push((c1, d).into());
+                            }
+
+                            // find shortest chain between c0 and c1
+                            let mut visited = vec![false; cells.len()];
+                            let mut queue = VecDeque::new();
+                            queue.push_back(vec![*pairs[0]]);
+                            let shortest_chain = loop {
+                                let path = queue.pop_front().unwrap();
+                                let idx = *path.last().unwrap();
+                                if idx == *pairs[1] {
+                                    break path
+                                }
+
+                                if visited[idx] { continue }
+                                visited[idx] = true;
+
+                                for &other in &graph[idx] {
+                                    let mut path = path.clone();
+                                    path.push(other);
+                                    queue.push_back(path);
+                                }
+                            };
+
+                            for idx in shortest_chain.into_iter().map(|i| cells[i]) {
+                                highlights.push(idx.into());
+                            }
+                            
+                            break 'strategy
+                        }
+                    }
+                }
+            }
+        },
     };
 
     Ok((board, highlights))

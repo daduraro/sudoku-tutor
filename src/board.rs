@@ -201,7 +201,7 @@ impl core::ops::Index<DigitIndex> for DigitMask {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, PartialOrd, Ord, Hash)]
 pub struct SudokuCell(SudokuFlags);
 
 impl core::default::Default for SudokuCell {
@@ -238,12 +238,16 @@ impl SudokuCell {
     }
 
     pub fn apply_mask(&mut self, mask: &DigitMask) -> bool {
-        if self.0 & mask.value() != self.0 {
+        if self.would_change(mask) {
             self.0 &= mask.value();
             true
         } else {
             false
         }
+    }
+
+    pub fn would_change(&self, mask: &DigitMask) -> bool {
+        self.0 & mask.value() != self.0
     }
 
     pub fn contains(&self, d: DigitIndex) -> bool {

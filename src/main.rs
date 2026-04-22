@@ -234,7 +234,7 @@ impl App {
             Constraint::Length(1),
         ]).areas(frame.area());
 
-        let filter_size = Strategy::iter().fold(0, |acc, s| acc.max(format!("|X {:?} (0000)|", s).len() as u16) );
+        let filter_size = Strategy::iter().fold(0, |acc, s| acc.max(format!("|X {:?} ({})|", s, self.games.len()).len() as u16) );
 
         let [filter_area, games_area] = Layout::horizontal([
             Constraint::Max(filter_size),
@@ -376,9 +376,7 @@ fn load_games(terminal: &mut DefaultTerminal, file_paths: &[PathBuf], sequential
     let games = {
         let mut games = Vec::<SudokuBoard>::new();
         for fpath in file_paths {
-            let reader = std::fs::File::open(fpath)?;
-            let reader = std::io::BufReader::new(reader);
-            games.extend(crate::io::load_games(Box::new(reader)))
+            games.extend(crate::io::load_games(fpath))
         }
         // games = vec![games.into_iter().nth(4).unwrap()];
         games

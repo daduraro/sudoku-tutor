@@ -12,6 +12,7 @@ use crate::index::{CellIndex, DigitIndex, HouseIndex, HouseIndexer, SudokuSubCel
 pub enum Highlight {
     Digit(SudokuSubCellIndex),
     House(HouseIndex),
+    Cell(CellIndex),
 }
 
 impl<Idx> core::convert::From<Idx> for Highlight 
@@ -24,6 +25,12 @@ where Idx: core::convert::Into<HouseIndex> {
 impl core::convert::From<SudokuSubCellIndex> for Highlight {
     fn from(value: SudokuSubCellIndex) -> Self {
         Highlight::Digit(value)
+    }
+}
+
+impl core::convert::From<CellIndex> for Highlight {
+    fn from(value: CellIndex) -> Self {
+        Highlight::Cell(value)
     }
 }
 
@@ -129,29 +136,39 @@ fn render_sudoku_highlights(
 {
     let highlight_style = Style::default().bg(Color::Rgb(40, 40, 40));
     for h in highlights.iter() {
-        if let Highlight::House(house) = h {
-            let highlight_area = match house {
-                HouseIndex::Block(b) => {
-                    let topleft = b.cell_index(0);
-                    area.resize(Size::new(7*3 + 2, 3*3 + 2))
-                        .offset(Offset::new(1, 1))
-                        .offset(Offset::new(8 * (topleft.column().value() as i32), 4 * (topleft.row().value() as i32)))
-                        .intersection(area)
-                },
-                HouseIndex::Row(r) => {
-                    area.resize(Size::new(7*9 + 8, 3))
-                        .offset(Offset::new(1, 1))
-                        .offset(Offset::new(0, 4 * (r.value() as i32)))
-                        .intersection(area)
-                },
-                HouseIndex::Column(c) => {
-                    area.resize(Size::new(7, 3*9 + 8))
-                        .offset(Offset::new(1, 1))
-                        .offset(Offset::new(8 * (c.value() as i32), 0))
-                        .intersection(area)
-                },
-            };
-            frame.render_widget(Block::default().style(highlight_style), highlight_area);
+        match h {
+            Highlight::House(house) => {
+                let highlight_area = match house {
+                    HouseIndex::Block(b) => {
+                        let topleft = b.cell_index(0);
+                        area.resize(Size::new(7*3 + 2, 3*3 + 2))
+                            .offset(Offset::new(1, 1))
+                            .offset(Offset::new(8 * (topleft.column().value() as i32), 4 * (topleft.row().value() as i32)))
+                            .intersection(area)
+                    },
+                    HouseIndex::Row(r) => {
+                        area.resize(Size::new(7*9 + 8, 3))
+                            .offset(Offset::new(1, 1))
+                            .offset(Offset::new(0, 4 * (r.value() as i32)))
+                            .intersection(area)
+                    },
+                    HouseIndex::Column(c) => {
+                        area.resize(Size::new(7, 3*9 + 8))
+                            .offset(Offset::new(1, 1))
+                            .offset(Offset::new(8 * (c.value() as i32), 0))
+                            .intersection(area)
+                    },
+                };
+                frame.render_widget(Block::default().style(highlight_style), highlight_area);
+            },
+            Highlight::Digit(_) => {},
+            Highlight::Cell(cell_idx) => {
+                let highlight_area = area.resize(Size::new(7, 3))
+                    .offset(Offset::new(1, 1))
+                    .offset(Offset::new(8 * (cell_idx.column().value() as i32), 4 * (cell_idx.row().value() as i32)))
+                    .intersection(area);
+                frame.render_widget(Block::default().style(highlight_style), highlight_area);
+            },
         }
     }
 }

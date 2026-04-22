@@ -238,7 +238,6 @@ impl HouseIndexer for HouseIndex {
     }
 }
 
-
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub struct CellIndex(RowIndex, ColumnIndex);
 
@@ -281,6 +280,40 @@ impl CellIndex {
         self.row() == other.row() ||
         self.column() == other.column() ||
         self.block() == other.block()
+    }
+
+    pub fn shared_houses(&self, other: &CellIndex) -> Vec<HouseIndex> {
+        let mut shared_houses: Vec<HouseIndex> = Vec::new();
+        if self.block() == other.block() {
+            shared_houses.push(self.block().into());
+        }
+        if self.row() == other.row() {
+            shared_houses.push(self.row().into());
+        }
+        if self.column() == other.column() {
+            shared_houses.push(self.column().into());
+        }
+        shared_houses
+    }
+
+    pub fn visible_with(&self, other: &CellIndex) -> Vec<CellIndex> {
+        let shared_houses = self.shared_houses(other);
+
+        let mut cells: Vec<CellIndex> = Vec::new();
+        for i in 0..shared_houses.len() {
+            let &house = &shared_houses[i];
+            let others = &shared_houses[i+1..];
+            cells.extend(house.cell_indices().into_iter().filter(|idx|{
+                (idx != self) && (idx != other) && !others.iter().any(|h| h.contains(*idx))
+            }));
+        }
+
+        if cells.is_empty() { // they do not share houses so add the crossovers
+            cells.push(CellIndex::new(self.row(), other.column()));
+            cells.push(CellIndex::new(other.row(), self.column()));
+        }
+
+        cells
     }
 
     pub fn from_flat(i: usize) -> CellIndex{

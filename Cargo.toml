@@ -9,6 +9,7 @@ bitvec = "1.0.1"
 clap = {version = "4.6.0", features = ["derive"]}
 color-eyre = "0.6.5"
 crossterm = "0.29.0"
+ena = "0.14.4"
 itertools = "0.14.0"
 log = "0.4.29"
 ratatui = "0.30.0"
