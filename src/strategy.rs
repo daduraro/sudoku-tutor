@@ -41,7 +41,12 @@ pub enum Strategy {
     NakedQuad,
     HiddenQuad,
 
-    // XWing,
+    // a candidate appears in two different columns or rows twice and
+    // in the same row/column respecectively (forming a square),
+    // as such we can eliminate all the other appearance of the candidate
+    // in the rest of the column/row as they are locked to that row/column
+    XWing,
+
     // RemotePair,
     // ChuteRemotePair,
     // ColoringType1,
@@ -293,6 +298,53 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
         },
         Strategy::HiddenQuad => {
             hidden_group(4, &mut board, &mut highlights);
+        },
+        Strategy::XWing => {
+            'strategy: for &d in DigitIndex::domain() {
+                for search_houses in [
+                            (*ColumnIndex::domain()).map(HouseIndex::from), 
+                            (*RowIndex::domain()).map(HouseIndex::from)
+                        ] {
+                    let appear_in: Vec<_> = search_houses.iter().map(|&idx|{
+                            let appear = board.house(idx).enumerate().fold(SudokuFlags::ZERO, |mut acc, (flat_idx, cell_value)|{
+                                acc.set(flat_idx, cell_value.contains(d));
+                                acc
+                            });
+                            (idx, appear)
+                        })
+                        .filter(|(_, appear)| appear.count_ones() == 2)
+                        .collect();
+                    let candidate_pairs = appear_in.into_iter().combinations(2).filter(|pair| pair[0].1 == pair[1].1);
+                    for candidate in candidate_pairs {
+                        let h0 = candidate[0].0;
+                        let h1 = candidate[1].0;
+                        let appear = candidate[0].1;
+
+                        let mut changed = false;
+                        let mask: DigitMask = DigitMask::all_but(d);
+                        for i in appear.iter_ones() {
+                            for h in [h0.crossed_by(i).unwrap(), h1.crossed_by(i).unwrap()] {
+                                for (cell_idx, cell) in board.indexed_house_mut(h) {
+                                    if h0.contains(cell_idx) || h1.contains(cell_idx) { continue }
+                                    changed |= cell.apply_mask(&mask);
+                                }
+                            }
+                        }
+
+                        if changed {
+                            highlights.push(h0.into());
+                            highlights.push(h1.into());
+                            for i in appear.iter_ones() {
+                                highlights.push(h0.crossed_by(i).unwrap().into());
+                                highlights.push(h1.crossed_by(i).unwrap().into());
+                                highlights.push((h0.cell_index(i), d).into());
+                                highlights.push((h1.cell_index(i), d).into());
+                            }
+                            break 'strategy
+                        }
+                    }
+                }
+            }
         },
 
     };

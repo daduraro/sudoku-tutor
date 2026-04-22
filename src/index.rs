@@ -206,6 +206,14 @@ impl HouseIndex {
             HouseIndex::Column(ColumnIndex(6)), HouseIndex::Column(ColumnIndex(7)), HouseIndex::Column(ColumnIndex(8)),
         ]
     }
+
+    pub fn crossed_by(&self, idx: usize) -> Option<HouseIndex> {
+        match self {
+            HouseIndex::Column(h) => Some(h.cell_index(idx).row().into()),
+            HouseIndex::Row(h) => Some(h.cell_index(idx).column().into()),
+            HouseIndex::Block(_) => None,
+        }
+    }
 }
 
 impl core::convert::From<RowIndex> for HouseIndex {
