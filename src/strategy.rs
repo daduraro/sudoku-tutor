@@ -253,13 +253,13 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
             hidden_group(2, &mut board, &mut highlights);
         },
         Strategy::LockedCandidatePointing => {
-            'outer: for b in BlockIndex::domain() {
-                for d in DigitIndex::domain() {
+            'outer: for &block in BlockIndex::domain() {
+                for &digit in DigitIndex::domain() {
                     let mut rows: Vec<_> = Vec::new();
                     let mut columns: Vec<_> = Vec::new();
 
-                    for cell_idx in b.cell_indices() {
-                        if board[cell_idx].contains(*d) {
+                    for cell_idx in block.cell_indices() {
+                        if board[cell_idx].contains(digit) {
                             if !rows.contains(&cell_idx.row()) { rows.push(cell_idx.row()); }
                             if !columns.contains(&cell_idx.column()) { columns.push(cell_idx.column()); }
                         }
@@ -277,17 +277,17 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
                         };
                     
                     if let Some((claiming_house, cells)) = claiming_house {
-                        let mask = DigitMask::all_but(*d);
+                        let mask = DigitMask::all_but(digit);
                         let mut changed = false;
                         for idx in claiming_house.cell_indices() {
-                            if &idx.block() == b { continue }
+                            if idx.block() == block { continue }
                             changed |= board[idx].apply_mask(&mask)
                         }
 
                         if changed {
                             highlights.push(claiming_house.into());
-                            highlights.push((*b).into());
-                            highlights.extend(cells.into_iter().map(|c| Highlight::Digit((c, *d))));
+                            highlights.push(block.into());
+                            highlights.extend(cells.into_iter().map(|c| Highlight::Digit((c, digit))));
                             break 'outer;
                         }
                     }
@@ -438,23 +438,12 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
                         let c0 = cells[*pairs[0]];
                         let c1 = cells[*pairs[1]];
                         
-                        let mut changed_cells = Vec::new();
+                        let mut changed = false;
                         for c in c0.visible_with(&c1) {
-                            if board[c].would_change(&mask) {
-                                changed_cells.push(c);
-                            }
+                            changed |= board[c].apply_mask(&mask);
                         }
 
-                        if !changed_cells.is_empty() {
-                            for c in changed_cells.iter() {
-                                board[c].apply_mask(&mask);
-                            //     highlights.extend(
-                            //         c.shared_houses(&c0).into_iter().map(Highlight::from)
-                            //     );
-                            //     highlights.extend(
-                            //         c.shared_houses(&c1).into_iter().map(Highlight::from)
-                            //     );
-                            }
+                        if changed {
                             for d in digits.iter_ones() {
                                 let d = DigitIndex::new(d);
                                 highlights.push((c0, d).into());

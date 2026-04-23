@@ -227,7 +227,7 @@ impl SudokuCell {
 
     pub fn digit_value(&self) -> Option<DigitIndex> {
         if self.is_digit() {
-            self.0.first_one().map(|i| DigitIndex::new(i))
+            self.0.first_one().map(DigitIndex::new)
         } else {
             None
         }
