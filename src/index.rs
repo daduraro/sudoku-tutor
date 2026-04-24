@@ -449,7 +449,7 @@ impl CellIndex {
         ]
     }
 
-    pub const fn share_house(&self, other: &CellIndex) -> bool {
+    pub const fn visible(&self, other: &CellIndex) -> bool {
         self.row().index() == other.row().index() ||
             self.column().index() == other.column().index() ||
             self.block().flat_index() == other.block().flat_index()
@@ -469,24 +469,21 @@ impl CellIndex {
         shared_houses
     }
 
-    pub fn visible_with(&self, other: &CellIndex) -> Vec<CellIndex> {
-        let shared_houses = self.shared_houses(other);
+    pub fn cells_visible_with(&self, other: &CellIndex) -> Vec<CellIndex> {
+        let mut candidates: Vec<_> = self.houses().iter().cartesian_product(other.houses())
+            .flat_map(|(a, b)| a.intersect(&b))
+            .filter(|idx| idx != self && idx != other)
+            .collect()
+        ;
+        candidates.sort();
 
-        let mut cells: Vec<CellIndex> = Vec::new();
-        for i in 0..shared_houses.len() {
-            let &house = &shared_houses[i];
-            let others = &shared_houses[i+1..];
-            cells.extend(house.cell_indices().filter(|idx|{
-                (idx != self) && (idx != other) && !others.iter().any(|h| h.contains(*idx))
-            }));
+        let mut unique = Vec::new();
+        while let Some(idx) = candidates.pop() {
+            if unique.last() == Some(&idx) { continue }
+            else { unique.push(idx) }
         }
 
-        if cells.is_empty() { // they do not share houses so add the crossovers
-            cells.push(CellIndex::new(self.row(), other.column()));
-            cells.push(CellIndex::new(other.row(), self.column()));
-        }
-
-        cells
+        unique
     }
 
     pub const fn from_flat(i: usize) -> CellIndex{
@@ -620,3 +617,23 @@ impl_house_intersect!(RowIndex ColumnIndex BlockIndex HouseIndex);
 impl_symmetrical_intersect!(HouseIndex => RowIndex);
 impl_symmetrical_intersect!(HouseIndex => ColumnIndex);
 impl_symmetrical_intersect!(HouseIndex => BlockIndex);
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visible_with() {
+        for pairs in CellIndex::iter().combinations_with_replacement(2) {
+            let c0 = pairs[0];
+            let c1 = pairs[1];
+            let visible: Vec<_> = c0.cells_visible_with(&c1).into_iter().sorted().collect();
+
+            let ground_truth: Vec<_> = CellIndex::iter()
+                .filter(|idx| idx != &c0 && idx != &c1 && idx.visible(&c0) && idx.visible(&c1)).sorted().collect();
+
+            assert_eq!(visible, ground_truth, "c0: {:?}; c1: {:?}", c0, c1);
+        }
+    }
+}

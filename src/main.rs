@@ -4,6 +4,7 @@ mod error;
 mod strategy;
 mod display;
 mod index;
+mod graph;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
