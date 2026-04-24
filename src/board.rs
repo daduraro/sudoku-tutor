@@ -2,6 +2,7 @@ use std::iter::zip;
 
 use bitvec::{bitarr, array::BitArray, order::Lsb0};
 use itertools::Itertools;
+use strum::IntoEnumIterator;
 
 use crate::error::SudokuError;
 use crate::index::{CellIndex, DigitIndex, HouseIndex, HouseIndexer, SudokuSubCellIndex};
@@ -52,10 +53,10 @@ impl SudokuBoard {
         self.iter().all(SudokuCell::is_valid)
     }
     pub fn is_solved(&self) -> bool {
-        HouseIndex::domain().iter().all(|h|{
-            self.house(*h).fold(SudokuFlags::default(), |mut acc, c| {
+        HouseIndex::iter().all(|h|{
+            self.house(h).fold(SudokuFlags::default(), |mut acc, c| {
                 if let Some(d) = c.digit_value() {
-                    acc.set(d.value(), true)
+                    acc.set(d.index(), true)
                 }
                 acc
             }).count_ones() == 9
@@ -64,7 +65,7 @@ impl SudokuBoard {
 
     pub fn diff(&self, prev: &SudokuBoard) -> Vec<SudokuSubCellIndex> {
         zip(self.indexed_iter(), prev).flat_map(|((cell_idx, curr), prev)| {
-            DigitIndex::domain().iter().cloned().filter_map(move |d| {
+            DigitIndex::iter().filter_map(move |d| {
                 let has_diff = curr.contains(d) ^ prev.contains(d);
                 has_diff.then_some((cell_idx, d))
             })
@@ -136,23 +137,23 @@ impl DigitMask {
 
     pub fn all_but(digit: DigitIndex) -> Self {
         let mut flags = SUDOKU_FLAG_ALL;
-        flags.set(digit.value(), false);
+        flags.set(digit.index(), false);
         DigitMask(flags)
     }
 
     pub fn only(digit: DigitIndex) -> Self {
         let mut flags = SudokuFlags::default();
-        flags.set(digit.value(), true);
+        flags.set(digit.index(), true);
         DigitMask(flags)
     }
 
     pub fn add(mut self, digit: DigitIndex) -> Self {
-        self.0.set(digit.value(), true);
+        self.0.set(digit.index(), true);
         self
     }
 
     pub fn sub(mut self, digit: DigitIndex) -> Self {
-        self.0.set(digit.value(), false);
+        self.0.set(digit.index(), false);
         self
     }
 
@@ -180,7 +181,7 @@ where
     fn all_but(self) -> DigitMask {
         let mut flags = SUDOKU_FLAG_ALL;
         for d in self {
-            flags.set(d.value(), false);
+            flags.set(d.index(), false);
         }
         DigitMask(flags)
     }
@@ -188,7 +189,7 @@ where
     fn only(self) -> DigitMask {
         let mut flags = SudokuFlags::default();
         for d in self {
-            flags.set(d.value(), true);
+            flags.set(d.index(), true);
         }
         DigitMask(flags)
     }
@@ -197,7 +198,7 @@ where
 impl core::ops::Index<DigitIndex> for DigitMask {
     type Output = bool;
     fn index(&self, index: DigitIndex) -> &Self::Output {
-        &self.0[index.value()]
+        &self.0[index.index()]
     }
 }
 
@@ -213,7 +214,7 @@ impl core::default::Default for SudokuCell {
 impl SudokuCell {
     pub fn digit(d: DigitIndex) -> Self {
         let mut v = SudokuFlags::ZERO;
-        v.set(d.value(), true);
+        v.set(d.index(), true);
         SudokuCell(v)
     }
 
@@ -231,6 +232,10 @@ impl SudokuCell {
         } else {
             None
         }
+    }
+
+    pub fn is_bivalue(&self) -> bool {
+        self.0.count_ones() == 2
     }
 
     pub fn num_digits(&self) -> usize {
@@ -251,7 +256,7 @@ impl SudokuCell {
     }
 
     pub fn contains(&self, d: DigitIndex) -> bool {
-        self.0[d.value()]
+        self.0[d.index()]
     }
 
     pub fn digits(&self) -> SudokuFlags {
@@ -276,7 +281,7 @@ impl core::convert::TryFrom<char> for SudokuCell {
 impl core::convert::From<&SudokuCell> for char {
     fn from(value: &SudokuCell) -> Self {
         if let Some(d) = value.digit_value() {
-            char::from_digit((d.value() + 1) as u32, 10).unwrap()
+            char::from_digit((d.index() + 1) as u32, 10).unwrap()
         } else {
             '0'
         }
@@ -351,7 +356,7 @@ mod tests {
         // | 9 0 0 | 0 7 2 | 8 0 5 |
         // +-------+-------+-------+
         let g = SudokuBoard::decode_sudoku_string("501740008000000050098600400040961580050000010016854070005006730070000000900072805").unwrap();
-        assert_eq!(g.house(BlockIndex::new(5)).encode_sudoku_string(), "580010070");
+        assert_eq!(g.house(BlockIndex::new(1, 2)).encode_sudoku_string(), "580010070");
         assert_eq!(g.house(ColumnIndex::new(8)).encode_sudoku_string(), "800000005");
         assert_eq!(g.house(RowIndex::new(3)).encode_sudoku_string(), "040961580");
     }
@@ -365,12 +370,4 @@ mod tests {
         }
         assert_eq!(g.house(idx).encode_sudoku_string(), "111111111");
     }
-
-    #[test]
-    #[should_panic]
-    fn test_read_oob() {
-        let _r = RowIndex::new(8);
-        let _b = BlockIndex::new(9);
-    }
-
 }

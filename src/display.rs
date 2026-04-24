@@ -4,6 +4,7 @@ use ratatui::widgets::{Paragraph, Block};
 use ratatui::{Frame};
 use ratatui::layout::{Offset, Rect, Size};
 use tui_big_text::{BigText, PixelSize};
+use strum::{IntoEnumIterator};
 
 use crate::board::{SudokuBoard};
 use crate::index::{CellIndex, DigitIndex, HouseIndex, HouseIndexer, SudokuSubCellIndex};
@@ -62,14 +63,14 @@ fn render_cell(
             .build();
         frame.render_widget(big_text, area.offset(Offset::new(1, 0)));
     } else {
-        let mut digits: Vec<_> = DigitIndex::domain().iter().map(|d| {
-            if striked.contains(&(cell_idx, *d)) {
-                Span::styled(String::from(char::from(*d)), Style::default().red().crossed_out())
-            } else if circled.contains(&(cell_idx, *d)) {
-                let ch = char::from_u32(('①' as u32) + (d.value() as u32)).unwrap_or('�');
+        let mut digits: Vec<_> = DigitIndex::iter().map(|digit| {
+            if striked.contains(&(cell_idx, digit)) {
+                Span::styled(String::from(char::from(digit)), Style::default().red().crossed_out())
+            } else if circled.contains(&(cell_idx, digit)) {
+                let ch = char::from_u32(('①' as u32) + (digit.index() as u32)).unwrap_or('�');
                 Span::styled(String::from(ch), Style::default().blue())
-            } else if board[cell_idx].contains(*d) {
-                Span::from(String::from(char::from(*d)))
+            } else if board[cell_idx].contains(digit) {
+                Span::from(String::from(char::from(digit)))
             } else {
                 Span::from(" ")
             }
@@ -143,19 +144,19 @@ fn render_sudoku_highlights(
                         let topleft = b.cell_index(0);
                         area.resize(Size::new(7*3 + 2, 3*3 + 2))
                             .offset(Offset::new(1, 1))
-                            .offset(Offset::new(8 * (topleft.column().value() as i32), 4 * (topleft.row().value() as i32)))
+                            .offset(Offset::new(8 * (topleft.column().index() as i32), 4 * (topleft.row().index() as i32)))
                             .intersection(area)
                     },
                     HouseIndex::Row(r) => {
                         area.resize(Size::new(7*9 + 8, 3))
                             .offset(Offset::new(1, 1))
-                            .offset(Offset::new(0, 4 * (r.value() as i32)))
+                            .offset(Offset::new(0, 4 * (r.index() as i32)))
                             .intersection(area)
                     },
                     HouseIndex::Column(c) => {
                         area.resize(Size::new(7, 3*9 + 8))
                             .offset(Offset::new(1, 1))
-                            .offset(Offset::new(8 * (c.value() as i32), 0))
+                            .offset(Offset::new(8 * (c.index() as i32), 0))
                             .intersection(area)
                     },
                 };
@@ -165,7 +166,7 @@ fn render_sudoku_highlights(
             Highlight::Cell(cell_idx) => {
                 let highlight_area = area.resize(Size::new(7, 3))
                     .offset(Offset::new(1, 1))
-                    .offset(Offset::new(8 * (cell_idx.column().value() as i32), 4 * (cell_idx.row().value() as i32)))
+                    .offset(Offset::new(8 * (cell_idx.column().index() as i32), 4 * (cell_idx.row().index() as i32)))
                     .intersection(area);
                 frame.render_widget(Block::default().style(highlight_style), highlight_area);
             },
@@ -195,7 +196,7 @@ pub fn render_sudoku_board(
     for cell_idx in CellIndex::domain() {
         let cell_area = area.resize(Size::new(7, 3))
             .offset(Offset::new(1, 1))
-            .offset(Offset::new(8 * (cell_idx.column().value() as i32), 4 * (cell_idx.row().value() as i32)))
+            .offset(Offset::new(8 * (cell_idx.column().index() as i32), 4 * (cell_idx.row().index() as i32)))
             .intersection(area)
             ;
         render_cell(board, cell_idx, frame, cell_area, &circled, striked);
