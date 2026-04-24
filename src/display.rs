@@ -7,7 +7,7 @@ use tui_big_text::{BigText, PixelSize};
 use strum::{IntoEnumIterator};
 
 use crate::board::{SudokuBoard};
-use crate::index::{CellIndex, DigitIndex, HouseIndex, HouseIndexer, SudokuSubCellIndex};
+use crate::index::{CellIndex, DigitIndex, HouseIndex, SudokuRegion, SudokuSubCellIndex};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Highlight {
@@ -193,7 +193,7 @@ pub fn render_sudoku_board(
             None
         }
     }).cloned().collect();
-    for cell_idx in CellIndex::domain() {
+    for cell_idx in CellIndex::iter() {
         let cell_area = area.resize(Size::new(7, 3))
             .offset(Offset::new(1, 1))
             .offset(Offset::new(8 * (cell_idx.column().index() as i32), 4 * (cell_idx.row().index() as i32)))

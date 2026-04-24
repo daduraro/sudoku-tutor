@@ -5,7 +5,7 @@ use itertools::Itertools;
 use strum::IntoEnumIterator;
 
 use crate::error::SudokuError;
-use crate::index::{CellIndex, DigitIndex, HouseIndex, HouseIndexer, SudokuSubCellIndex};
+use crate::index::{CellIndex, DigitIndex, HouseIndex, SudokuRegion, SudokuSubCellIndex};
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct SudokuBoard(Vec<SudokuCell>);
@@ -19,24 +19,24 @@ impl SudokuBoard {
         }
     }
 
-    pub fn house<Idx: HouseIndexer>(&self, idx: Idx) -> impl Iterator<Item=&SudokuCell> {
-        idx.cell_indices().into_iter()
+    pub fn region<Idx: SudokuRegion>(&self, idx: &Idx) -> impl Iterator<Item=&SudokuCell> {
+        idx.cell_indices()
             .map(|cell_idx: CellIndex| &self[cell_idx])
     }
-    pub fn house_mut<Idx: HouseIndexer>(&mut self, idx: Idx) -> impl Iterator<Item=&mut SudokuCell> {
-        debug_assert!(idx.flat_indices().iter().all_unique());
+    pub fn region_mut<Idx: SudokuRegion>(&mut self, idx: &Idx) -> impl Iterator<Item=&mut SudokuCell> {
+        debug_assert!(idx.flat_indices().all_unique());
         let ptr = self.0.as_mut_ptr();
-        idx.flat_indices().into_iter()
+        idx.flat_indices()
             .map(move |offset| unsafe { &mut *ptr.add(offset) })
     }
-    pub fn indexed_house<Idx: HouseIndexer>(&self, idx: Idx) -> impl Iterator<Item=(CellIndex, &SudokuCell)> {
-        idx.cell_indices().into_iter()
+    pub fn indexed_region<Idx: SudokuRegion>(&self, idx: &Idx) -> impl Iterator<Item=(CellIndex, &SudokuCell)> {
+        idx.cell_indices()
             .map(move |cell_idx| (cell_idx, &self[cell_idx]))
     }
-    pub fn indexed_house_mut<Idx: HouseIndexer>(&mut self, idx: Idx) -> impl Iterator<Item=(CellIndex, &mut SudokuCell)> {
-        debug_assert!(idx.cell_indices().iter().map(CellIndex::flat).all_unique());
+    pub fn indexed_region_mut<Idx: SudokuRegion>(&mut self, idx: &Idx) -> impl Iterator<Item=(CellIndex, &mut SudokuCell)> {
+        debug_assert!(idx.cell_indices().map(|cell_idx| cell_idx.flat()).all_unique());
         let ptr = self.0.as_mut_ptr();
-        idx.cell_indices().into_iter()
+        idx.cell_indices()
             .map(move |cell_idx| (cell_idx, unsafe { &mut *ptr.add(cell_idx.flat()) }))
     }
 
@@ -54,7 +54,7 @@ impl SudokuBoard {
     }
     pub fn is_solved(&self) -> bool {
         HouseIndex::iter().all(|h|{
-            self.house(h).fold(SudokuFlags::default(), |mut acc, c| {
+            self.region(&h).fold(SudokuFlags::default(), |mut acc, c| {
                 if let Some(d) = c.digit_value() {
                     acc.set(d.index(), true)
                 }
@@ -259,8 +259,12 @@ impl SudokuCell {
         self.0[d.index()]
     }
 
-    pub fn digits(&self) -> SudokuFlags {
+    pub fn digit_flags(&self) -> SudokuFlags {
         self.0
+    }
+
+    pub fn digits(&self) -> impl Iterator<Item=DigitIndex> {
+        self.0.iter_ones().map(DigitIndex::new)
     }
 }
 
@@ -356,18 +360,18 @@ mod tests {
         // | 9 0 0 | 0 7 2 | 8 0 5 |
         // +-------+-------+-------+
         let g = SudokuBoard::decode_sudoku_string("501740008000000050098600400040961580050000010016854070005006730070000000900072805").unwrap();
-        assert_eq!(g.house(BlockIndex::new(1, 2)).encode_sudoku_string(), "580010070");
-        assert_eq!(g.house(ColumnIndex::new(8)).encode_sudoku_string(), "800000005");
-        assert_eq!(g.house(RowIndex::new(3)).encode_sudoku_string(), "040961580");
+        assert_eq!(g.region(&BlockIndex::new(1, 2)).encode_sudoku_string(), "580010070");
+        assert_eq!(g.region(&ColumnIndex::new(8)).encode_sudoku_string(), "800000005");
+        assert_eq!(g.region(&RowIndex::new(3)).encode_sudoku_string(), "040961580");
     }
 
     #[test]
     fn modify_block() {
         let mut g = SudokuBoard::decode_sudoku_string("501740008000000050098600400040961580050000010016854070005006730070000000900072805").unwrap();
         let idx = ColumnIndex::new(0);
-        for c in g.house_mut(idx) {
+        for c in g.region_mut(&idx) {
             *c = SudokuCell::digit(DigitIndex::new(0));
         }
-        assert_eq!(g.house(idx).encode_sudoku_string(), "111111111");
+        assert_eq!(g.region(&idx).encode_sudoku_string(), "111111111");
     }
 }

@@ -6,7 +6,7 @@ use strum::IntoEnumIterator;
 use ena::unify::{UnifyKey, InPlaceUnificationTable};
 
 use crate::board::{SudokuFlags, SudokuBoard, DigitMask, DigitMaskFromIter};
-use crate::index::{BlockIndex, RowIndex, ColumnIndex, CellIndex, DigitIndex, HouseIndex, HouseIndexer};
+use crate::index::{BlockIndex, CellIndex, ChuteIndex, ColumnIndex, DigitIndex, HouseIndex, SudokuRegion, RowIndex, RegionIntersection, LineDirection};
 use crate::error::SudokuError;
 use crate::display::Highlight;
 
@@ -79,7 +79,8 @@ pub enum Strategy {
     RemotePair,
 
 
-    // ChuteRemotePair,
+    ChuteRemotePairDouble,
+    ChuteRemotePairSingle,
     // ColoringType1,
     // ColoringType2,
     // 
@@ -89,7 +90,7 @@ pub enum Strategy {
 fn naked_group(n: usize, board: &mut SudokuBoard, highlights: &mut Vec<Highlight>) {
     assert!(1 < n && n < 9);
     for house_idx in HouseIndex::iter() {
-        let candidate_cells: Vec::<_> = board.indexed_house(house_idx).filter_map(|(idx, cell)| {
+        let candidate_cells: Vec::<_> = board.indexed_region(&house_idx).filter_map(|(idx, cell)| {
             let digits = cell.num_digits();
             (digits > 1 && digits <= n).then_some(idx)
         }).collect();
@@ -97,14 +98,14 @@ fn naked_group(n: usize, board: &mut SudokuBoard, highlights: &mut Vec<Highlight
         let candidate_groups: Vec<_> = candidate_cells.into_iter().combinations(n)
             .filter_map(|indices|{
                 let digits = indices.iter().map(|idx| board[*idx])
-                    .fold(SudokuFlags::ZERO, |acc, d| acc | d.digits());
+                    .fold(SudokuFlags::ZERO, |acc, d| acc | d.digit_flags());
                 (digits.count_ones() == n).then_some((digits, indices))
             }).collect();
 
         for (digits, indices) in candidate_groups {
             let mut changed: bool = false;
             let mask = DigitMask::new(!digits);
-            for (idx, cell) in board.indexed_house_mut(house_idx) {
+            for (idx, cell) in board.indexed_region_mut(&house_idx) {
                 if indices.contains(&idx) { continue }
                 changed |= cell.apply_mask(&mask);
             }
@@ -133,7 +134,7 @@ fn hidden_group(n: usize, board: &mut SudokuBoard, highlights: &mut Vec<Highligh
             // for each digit, get which cells in the house contain them
             let digit_cells = {
                 let mut digit_cells = [SudokuFlags::default(); DigitIndex::COUNT];
-                for (idx, cell) in board.house(house_idx).enumerate() {
+                for (idx, cell) in board.region(&house_idx).enumerate() {
                     for digit in DigitIndex::iter() {
                         digit_cells[digit.index()].set(idx, cell.contains(digit))
                     }
@@ -212,12 +213,12 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
                 let mut relevant_digit = false;
 
                 let mask = DigitMask::all_but(d);
-                for h in primary_cell_idx.houses() {
-                    for (cell_idx, cell) in board.indexed_house_mut(h) {
+                for house in primary_cell_idx.houses() {
+                    for (cell_idx, cell) in board.indexed_region_mut(&house) {
                         if cell_idx == primary_cell_idx { continue }
                         if cell.apply_mask(&mask) {
                             relevant_digit = true;
-                            match h {
+                            match house {
                                 HouseIndex::Block(b) => blocks_highlight.set(b.flat_index(), true),
                                 HouseIndex::Column(c) => columns_highlight.set(c.index(), true),
                                 HouseIndex::Row(r) => rows_highlight.set(r.index(), true),
@@ -297,7 +298,7 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
         Strategy::LockedCandidateClaiming => {
             'strategy: for house_idx in HouseIndex::rows_and_columns() {
                 for digit in DigitIndex::iter() {
-                    let cells: Vec<_> = house_idx.cell_indices().iter().cloned().filter(|idx|{
+                    let cells: Vec<_> = house_idx.cell_indices().filter(|idx|{
                         board[idx].contains(digit)
                     }).collect();
                     let same_block = cells.iter().map(CellIndex::block).all_equal();
@@ -334,12 +335,15 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
         },
         Strategy::XWing => {
             'strategy: for d in DigitIndex::iter() {
-                for search_houses in [
-                            &mut ColumnIndex::iter().map(HouseIndex::from) as &mut dyn Iterator<Item=HouseIndex>, 
-                            &mut RowIndex::iter().map(HouseIndex::from) as &mut dyn Iterator<Item=HouseIndex>,
-                        ] {
-                    let appear_in: Vec<_> = search_houses.map(|idx|{
-                            let appear = board.house(idx).enumerate().fold(SudokuFlags::ZERO, |mut acc, (flat_idx, cell_value)|{
+                // for search_houses in [
+                //             &mut ColumnIndex::iter().map(HouseIndex::from) as &mut dyn Iterator<Item=HouseIndex>, 
+                //             &mut RowIndex::iter().map(HouseIndex::from) as &mut dyn Iterator<Item=HouseIndex>,
+                //         ] {
+                for search_direction in LineDirection::iter() {
+                    let search_houses = search_direction.lines();
+                    let perpendicular_direction = search_direction.other();
+                    let appear_in: Vec<_> = search_houses.into_iter().map(|idx|{
+                            let appear = board.region(&idx).enumerate().fold(SudokuFlags::ZERO, |mut acc, (flat_idx, cell_value)|{
                                 acc.set(flat_idx, cell_value.contains(d));
                                 acc
                             });
@@ -356,8 +360,11 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
                         let mut changed = false;
                         let mask: DigitMask = DigitMask::all_but(d);
                         for i in appear.iter_ones() {
-                            for h in [h0.crossed_by(i).unwrap(), h1.crossed_by(i).unwrap()] {
-                                for (cell_idx, cell) in board.indexed_house_mut(h) {
+                            for h in [
+                                        h0.cell_index(i).line(perpendicular_direction), 
+                                        h1.cell_index(i).line(perpendicular_direction), 
+                                    ] {
+                                for (cell_idx, cell) in board.indexed_region_mut(&h) {
                                     if h0.contains(cell_idx) || h1.contains(cell_idx) { continue }
                                     changed |= cell.apply_mask(&mask);
                                 }
@@ -368,8 +375,8 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
                             highlights.push(h0.into());
                             highlights.push(h1.into());
                             for i in appear.iter_ones() {
-                                highlights.push(h0.crossed_by(i).unwrap().into());
-                                highlights.push(h1.crossed_by(i).unwrap().into());
+                                highlights.push(h0.cell_index(i).line(perpendicular_direction).into());
+                                highlights.push(h1.cell_index(i).line(perpendicular_direction).into());
                                 highlights.push((h0.cell_index(i), d).into());
                                 highlights.push((h1.cell_index(i), d).into());
                             }
@@ -380,103 +387,164 @@ fn apply_strategy(s: Strategy, mut board: SudokuBoard) -> Result<(SudokuBoard, V
             }
         },
         Strategy::RemotePair => {
-            let bv_cells: Vec<_> = CellIndex::domain().filter(|idx| board[idx].is_bivalue())
-                .into_group_map_by(|idx| board[idx].digits())
-                .into_iter()
-                .filter(|(_, v)| v.len() >= 3)
-                .collect()
-                ;
-            'strategy: for (digits, cells) in bv_cells {
-                let mut graph: Vec<Vec<usize>> = vec![Vec::new(); cells.len()];
-                let mut ut = InPlaceUnificationTable::<IntKey>::new();
-                let keys: Vec<_> = cells.iter().map(|_| ut.new_key(())).collect();
-                for i in 0..cells.len() {
-                    for j in (i+1)..cells.len() {
-                        if cells[i].share_house(&cells[j]) {
-                            ut.union(keys[i], keys[j]);
-                            graph[i].push(j);
-                            graph[j].push(i);
-                        }
-                    }
-                }
+            // let bv_cells: Vec<_> = CellIndex::iter().filter(|idx| board[idx].is_bivalue())
+            //     .into_group_map_by(|idx| board[idx].digit_flags())
+            //     .into_iter()
+            //     .filter(|(_, v)| v.len() >= 3)
+            //     .collect()
+            //     ;
+            // 'strategy: for (digits, cells) in bv_cells {
+            //     let mut graph: Vec<Vec<usize>> = vec![Vec::new(); cells.len()];
+            //     let mut ut = InPlaceUnificationTable::<IntKey>::new();
+            //     let keys: Vec<_> = cells.iter().map(|_| ut.new_key(())).collect();
+            //     for i in 0..cells.len() {
+            //         for j in (i+1)..cells.len() {
+            //             if cells[i].share_house(&cells[j]) {
+            //                 ut.union(keys[i], keys[j]);
+            //                 graph[i].push(j);
+            //                 graph[j].push(i);
+            //             }
+            //         }
+            //     }
 
-                let mut processed_groups = Vec::new();
-                for key in keys {
-                    let root = ut.find(key);
-                    if processed_groups.contains(&root) { continue }
-                    processed_groups.push(root);
+            //     let mut processed_groups = Vec::new();
+            //     for key in keys {
+            //         let root = ut.find(key);
+            //         if processed_groups.contains(&root) { continue }
+            //         processed_groups.push(root);
 
-                    let root = root.index() as usize;
+            //         let root = root.index() as usize;
 
-                    // coloring the cells starting from root
-                    let mut red_group = Vec::new();
-                    let mut black_group = Vec::new();
+            //         // coloring the cells starting from root
+            //         let mut red_group = Vec::new();
+            //         let mut black_group = Vec::new();
                     
-                    let mut visited = vec![false; cells.len()];
-                    let mut stack = vec![(0usize, root)];
-                    while let Some((dist, idx)) = stack.pop() {
-                        if visited[idx] { continue }
-                        visited[idx] = true;
+            //         let mut visited = vec![false; cells.len()];
+            //         let mut stack = vec![(0usize, root)];
+            //         while let Some((dist, idx)) = stack.pop() {
+            //             if visited[idx] { continue }
+            //             visited[idx] = true;
 
-                        if dist.is_multiple_of(2) {
-                            red_group.push(idx);
-                        } else {
-                            black_group.push(idx);
+            //             if dist.is_multiple_of(2) {
+            //                 red_group.push(idx);
+            //             } else {
+            //                 black_group.push(idx);
+            //             }
+            //             for &other in graph[idx].iter() {
+            //                 stack.push((dist + 1, other));
+            //             }
+            //         }
+
+            //         // all cells in red_group are locked pairs
+            //         // all cells in black_group are locked pairs
+            //         // check for each pair in red_group and pair in black_group, whether
+            //         // there is a cell which is visible to both of them and contain
+            //         // the digits
+            //         let mask = DigitMask::new(!digits);
+            //         for pairs in red_group.iter().combinations(2).chain(black_group.iter().combinations(2)) {
+            //             let c0 = cells[*pairs[0]];
+            //             let c1 = cells[*pairs[1]];
+                        
+            //             let mut changed = false;
+            //             for c in c0.visible_with(&c1) {
+            //                 changed |= board[c].apply_mask(&mask);
+            //             }
+
+            //             if changed {
+            //                 for d in digits.iter_ones() {
+            //                     let d = DigitIndex::new(d);
+            //                     highlights.push((c0, d).into());
+            //                     highlights.push((c1, d).into());
+            //                 }
+
+            //                 // find shortest chain between c0 and c1
+            //                 let mut visited = vec![false; cells.len()];
+            //                 let mut queue = VecDeque::new();
+            //                 queue.push_back(vec![*pairs[0]]);
+            //                 let shortest_chain = loop {
+            //                     let path = queue.pop_front().unwrap();
+            //                     let idx = *path.last().unwrap();
+            //                     if idx == *pairs[1] {
+            //                         break path
+            //                     }
+
+            //                     if visited[idx] { continue }
+            //                     visited[idx] = true;
+
+            //                     for &other in &graph[idx] {
+            //                         let mut path = path.clone();
+            //                         path.push(other);
+            //                         queue.push_back(path);
+            //                     }
+            //                 };
+
+            //                 for idx in shortest_chain.into_iter().map(|i| cells[i]) {
+            //                     highlights.push(idx.into());
+            //                 }
+                            
+            //                 break 'strategy
+            //             }
+            //         }
+            //     }
+            // }
+        },
+        Strategy::ChuteRemotePairSingle | Strategy::ChuteRemotePairDouble => {
+            'strategy: for chute in ChuteIndex::iter() {
+                let direction = chute.direction();
+
+                let bv_cells: Vec<_> = board.indexed_region(&chute).filter(|(_, cell)| cell.is_bivalue()).map(|(idx,_)| idx).collect();
+                for indices in bv_cells.iter().combinations(2) {
+                    let cell_0 = *indices[0];
+                    let cell_1 = *indices[1];
+
+                    if board[cell_0] != board[cell_1] { continue } // they do not share bivalue
+                    if cell_0.share_house(&cell_1) { continue } // naked pairs, ignore them
+
+                    let cell = board[cell_0];
+
+                    let line_0 = cell_0.line(direction);
+                    let line_1 = cell_1.line(direction);
+                    let line_other = chute.lines().into_iter().find(|i| i != &line_0 && i != &line_1).unwrap();
+
+                    let block_0 = cell_0.block();
+                    let block_1 = cell_1.block();
+                    let block_other = chute.blocks().into_iter().find(|i| i != &block_0 && i != &block_1).unwrap();
+
+                    let digits_in_other = line_other.intersect(&block_other).into_iter()
+                            .map(|cell_idx| board[cell_idx].digit_flags())
+                            .fold(SudokuFlags::ZERO, |acc, flags| acc | flags) 
+                        & cell.digit_flags();
+
+                    let mut changed = false;
+                    if digits_in_other.count_ones() == 1 && matches!(s, Strategy::ChuteRemotePairSingle) {
+                        // chute remote pair (single)
+                        let mask = DigitMask::new(!digits_in_other);
+                        let roi = block_0.intersect(&line_1).into_iter().chain(block_1.intersect(&line_0));
+                        for cell_idx in roi {
+                            changed |= board[cell_idx].apply_mask(&mask);
                         }
-                        for &other in graph[idx].iter() {
-                            stack.push((dist + 1, other));
+                    } else if digits_in_other.count_ones() == 0 && matches!(s, Strategy::ChuteRemotePairDouble) {
+                        // chute remote pair (double)
+                        let mask = DigitMask::new(!cell.digit_flags());
+                        let roi = line_0.cell_indices().filter(|idx| idx != &cell_0 && idx.block() != block_other)
+                            .chain(line_1.cell_indices().filter(|idx| idx != &cell_1 && idx.block() != block_other));
+                        for cell_idx in roi {
+                            changed |= board[cell_idx].apply_mask(&mask);
                         }
                     }
 
-                    // all cells in red_group are locked pairs
-                    // all cells in black_group are locked pairs
-                    // check for each pair in red_group and pair in black_group, whether
-                    // there is a cell which is visible to both of them and contain
-                    // the digits
-                    let mask = DigitMask::new(!digits);
-                    for pairs in red_group.iter().combinations(2).chain(black_group.iter().combinations(2)) {
-                        let c0 = cells[*pairs[0]];
-                        let c1 = cells[*pairs[1]];
-                        
-                        let mut changed = false;
-                        for c in c0.visible_with(&c1) {
-                            changed |= board[c].apply_mask(&mask);
+                    if changed {
+                        for digit in cell.digits() {
+                            highlights.push((cell_0, digit).into());
+                            highlights.push((cell_1, digit).into());
                         }
-
-                        if changed {
-                            for d in digits.iter_ones() {
-                                let d = DigitIndex::new(d);
-                                highlights.push((c0, d).into());
-                                highlights.push((c1, d).into());
+                        for digit in digits_in_other.iter_ones().map(DigitIndex::new) {
+                            for cell in line_other.intersect(&block_other) {
+                                highlights.push((cell, digit).into());
                             }
-
-                            // find shortest chain between c0 and c1
-                            let mut visited = vec![false; cells.len()];
-                            let mut queue = VecDeque::new();
-                            queue.push_back(vec![*pairs[0]]);
-                            let shortest_chain = loop {
-                                let path = queue.pop_front().unwrap();
-                                let idx = *path.last().unwrap();
-                                if idx == *pairs[1] {
-                                    break path
-                                }
-
-                                if visited[idx] { continue }
-                                visited[idx] = true;
-
-                                for &other in &graph[idx] {
-                                    let mut path = path.clone();
-                                    path.push(other);
-                                    queue.push_back(path);
-                                }
-                            };
-
-                            for idx in shortest_chain.into_iter().map(|i| cells[i]) {
-                                highlights.push(idx.into());
-                            }
-                            
-                            break 'strategy
                         }
+                        highlights.extend(line_other.intersect(&block_other).into_iter().map(Highlight::from));
+                        break 'strategy
                     }
                 }
             }

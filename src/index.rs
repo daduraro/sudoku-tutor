@@ -1,4 +1,7 @@
+use std::ops::{Add, BitAnd};
+
 use itertools::Itertools;
+use ratatui::widgets::Block;
 use strum::{EnumCount, EnumIter, FromRepr, IntoEnumIterator};
 
 use crate::{board::SudokuFlags};
@@ -16,6 +19,18 @@ impl DigitIndex {
     pub const fn index(&self) -> usize {
         *self as usize
     }
+
+    pub const fn const_eq(&self, other: &Self) -> bool {
+        self.index() == other.index()
+    }
+
+    pub const fn domain() -> [DigitIndex; 9] {
+        [
+            DigitIndex::D1, DigitIndex::D2, DigitIndex::D3,
+            DigitIndex::D4, DigitIndex::D5, DigitIndex::D6,
+            DigitIndex::D7, DigitIndex::D8, DigitIndex::D9,
+        ]
+    }
 }
 
 impl core::convert::From<DigitIndex> for char {
@@ -30,21 +45,23 @@ impl core::convert::From<&DigitIndex> for char {
     }
 }
 
-pub trait HouseIndexer {
-    fn cell_index(&self, idx: usize) -> CellIndex;
+pub trait SudokuRegion {
+    const CELL_COUNT: usize;
+
+    fn cell_index(&self, flat_index: usize) -> CellIndex;
+
+    fn cell_indices(&self) -> impl Iterator<Item=CellIndex> {
+        (0..Self::CELL_COUNT).map(|i| self.cell_index(i))
+    }
 
     fn contains(&self, cell_idx: CellIndex) -> bool {
-        (0..9).any(|i| self.cell_index(i) == cell_idx)
+        self.cell_indices().any(|idx| idx == cell_idx)
     }
 
-    fn cell_indices(&self) -> [CellIndex; 9] {
-        core::array::from_fn(|idx| self.cell_index(idx))
-    }
-    fn flat_indices(&self) -> [usize; 9] {
+    fn flat_indices(&self) -> impl Iterator<Item=usize> {
         self.cell_indices().map(|idx| idx.flat())
     }
 }
-
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug, EnumCount, FromRepr, EnumIter)]
 pub enum RowIndex {
@@ -59,9 +76,26 @@ impl RowIndex {
     pub const fn index(&self) -> usize {
         *self as usize
     }
+
+    pub const fn chute(&self) -> ChuteIndex {
+        ChuteIndex::new(LineDirection::Horizontal, self.index() / 3)
+    }
+
+    pub const fn const_eq(&self, other: &Self) -> bool {
+        self.index() == other.index()
+    }
+
+    pub const fn domain() -> [RowIndex; 9] {
+        [
+            RowIndex::R1, RowIndex::R2, RowIndex::R3,
+            RowIndex::R4, RowIndex::R5, RowIndex::R6,
+            RowIndex::R7, RowIndex::R8, RowIndex::R9,
+        ]
+    }
 }
 
-impl HouseIndexer for RowIndex {
+impl SudokuRegion for RowIndex {
+    const CELL_COUNT: usize = 9;
     fn cell_index(&self, idx: usize) -> CellIndex {
         CellIndex::new(*self, ColumnIndex::new(idx))
     }
@@ -80,9 +114,26 @@ impl ColumnIndex {
     pub const fn index(&self) -> usize {
         *self as usize
     }
+
+    pub const fn chute(&self) -> ChuteIndex {
+        ChuteIndex::new(LineDirection::Vertical, self.index() / 3)
+    }
+
+    pub const fn const_eq(&self, other: &Self) -> bool {
+        self.index() == other.index()
+    }
+
+    pub const fn domain() -> [ColumnIndex; 9] {
+        [
+            ColumnIndex::C1, ColumnIndex::C2, ColumnIndex::C3,
+            ColumnIndex::C4, ColumnIndex::C5, ColumnIndex::C6,
+            ColumnIndex::C7, ColumnIndex::C8, ColumnIndex::C9,
+        ]
+    }
 }
 
-impl HouseIndexer for ColumnIndex {
+impl SudokuRegion for ColumnIndex {
+    const CELL_COUNT: usize = 9;
     fn cell_index(&self, idx: usize) -> CellIndex {
         CellIndex::new(RowIndex::new(idx), *self)
     }
@@ -125,9 +176,14 @@ impl BlockIndex {
     pub const fn flat_index(&self) -> usize {
         *self as usize
     }
+
+    pub const fn const_eq(&self, other: &Self) -> bool {
+        self.flat_index() == other.flat_index()
+    }
 }
 
-impl HouseIndexer for BlockIndex {
+impl SudokuRegion for BlockIndex {
+    const CELL_COUNT: usize = 9;
     fn cell_index(&self, idx: usize) -> CellIndex {
         assert!(idx < 9);
         let row = RowIndex::new(self.chute_row() * 3 + idx /3);
@@ -136,10 +192,47 @@ impl HouseIndexer for BlockIndex {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum ChuteDirection {
+#[derive(PartialEq, Eq, Clone, Copy, Debug, EnumIter, EnumCount)]
+pub enum LineDirection {
     Vertical,
     Horizontal,
+}
+
+impl LineDirection {
+    pub const fn const_eq(&self, other: &Self) -> bool {
+        *self as u8 == *other as u8
+    }
+
+    pub const fn other(self) -> Self {
+        match self {
+            LineDirection::Horizontal => LineDirection::Vertical,
+            LineDirection::Vertical => LineDirection::Horizontal,
+        }
+    }
+
+    pub const fn line(&self, index: usize) -> HouseIndex {
+        match self {
+            LineDirection::Horizontal => HouseIndex::Row(RowIndex::new(index)),
+            LineDirection::Vertical => HouseIndex::Column(ColumnIndex::new(index)),
+        }
+    }
+
+    pub const fn lines(&self) -> [HouseIndex; 9] {
+        match self {
+            // LineDirection::Horizontal => RowIndex::domain().map(HouseIndex::Row),
+            // LineDirection::Vertical => ColumnIndex::domain().map(HouseIndex::Column),
+            LineDirection::Horizontal => [
+                HouseIndex::Row(RowIndex::R1), HouseIndex::Row(RowIndex::R2), HouseIndex::Row(RowIndex::R3),
+                HouseIndex::Row(RowIndex::R4), HouseIndex::Row(RowIndex::R5), HouseIndex::Row(RowIndex::R6),
+                HouseIndex::Row(RowIndex::R7), HouseIndex::Row(RowIndex::R8), HouseIndex::Row(RowIndex::R9),
+            ],
+            LineDirection::Vertical => [
+                HouseIndex::Column(ColumnIndex::C1), HouseIndex::Column(ColumnIndex::C2), HouseIndex::Column(ColumnIndex::C3),
+                HouseIndex::Column(ColumnIndex::C4), HouseIndex::Column(ColumnIndex::C5), HouseIndex::Column(ColumnIndex::C6),
+                HouseIndex::Column(ColumnIndex::C7), HouseIndex::Column(ColumnIndex::C8), HouseIndex::Column(ColumnIndex::C9),
+            ],
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, EnumIter, EnumCount)]
@@ -148,23 +241,67 @@ pub enum ChuteIndex {
     H1, H2, H3,
 }
 impl ChuteIndex {
-    pub const fn new(direction: ChuteDirection, index: usize) -> Self {
+    pub const fn new(direction: LineDirection, index: usize) -> Self {
         assert!(index < 3);
         match (direction, index) {
-            (ChuteDirection::Vertical, 0) => ChuteIndex::V1,
-            (ChuteDirection::Vertical, 1) => ChuteIndex::V2,
-            (ChuteDirection::Vertical, 2) => ChuteIndex::V3,
-            (ChuteDirection::Horizontal, 0) => ChuteIndex::H1,
-            (ChuteDirection::Horizontal, 1) => ChuteIndex::H2,
-            (ChuteDirection::Horizontal, 2) => ChuteIndex::H3,
+            (LineDirection::Vertical, 0) => ChuteIndex::V1,
+            (LineDirection::Vertical, 1) => ChuteIndex::V2,
+            (LineDirection::Vertical, 2) => ChuteIndex::V3,
+            (LineDirection::Horizontal, 0) => ChuteIndex::H1,
+            (LineDirection::Horizontal, 1) => ChuteIndex::H2,
+            (LineDirection::Horizontal, 2) => ChuteIndex::H3,
             _ => panic!()
         }
     }
 
-    pub const fn direction(&self) -> ChuteDirection {
+    pub const fn const_eq(&self, other: &ChuteIndex) -> bool {
+        self.index_value() == other.index_value() &&
+            self.direction().const_eq(&other.direction())
+    }
+
+    pub const fn line(&self, index: usize) -> HouseIndex {
+        assert!(index < 3);
+        self.lines()[index]
+    }
+
+    pub const fn lines(&self) -> [HouseIndex; 3] {
+        match self.index() {
+            (LineDirection::Vertical, index_value) => [
+                HouseIndex::Column(ColumnIndex::new(index_value*3   )),
+                HouseIndex::Column(ColumnIndex::new(index_value*3 + 1)),
+                HouseIndex::Column(ColumnIndex::new(index_value*3 + 2)),
+            ],
+            (LineDirection::Horizontal, index_value) => [
+                HouseIndex::Row(RowIndex::new(index_value*3   )),
+                HouseIndex::Row(RowIndex::new(index_value*3 + 1)),
+                HouseIndex::Row(RowIndex::new(index_value*3 + 2)),
+            ],
+        }
+    }
+
+    pub const fn block(&self, index: usize) -> BlockIndex {
+        self.blocks()[index]
+    }
+
+    pub const fn blocks(&self) -> [BlockIndex; 3] {
+        match self.index() {
+            (LineDirection::Horizontal, block_row) => [
+                BlockIndex::new(block_row, 0),
+                BlockIndex::new(block_row, 1),
+                BlockIndex::new(block_row, 2),
+            ],
+            (LineDirection::Vertical, block_column) => [
+                BlockIndex::new(0, block_column),
+                BlockIndex::new(1, block_column),
+                BlockIndex::new(2, block_column),
+            ],
+        }
+    }
+
+    pub const fn direction(&self) -> LineDirection {
         match self {
-            ChuteIndex::V1 | ChuteIndex::V2 | ChuteIndex::V3 => ChuteDirection::Vertical,
-            ChuteIndex::H1 | ChuteIndex::H2 | ChuteIndex::H3 => ChuteDirection::Horizontal,
+            ChuteIndex::V1 | ChuteIndex::V2 | ChuteIndex::V3 => LineDirection::Vertical,
+            ChuteIndex::H1 | ChuteIndex::H2 | ChuteIndex::H3 => LineDirection::Horizontal,
         }
     }
 
@@ -176,7 +313,7 @@ impl ChuteIndex {
         }
     }
 
-    pub const fn index(&self) -> (ChuteDirection, usize) {
+    pub const fn index(&self) -> (LineDirection, usize) {
         (self.direction(), self.index_value())
     }
 
@@ -214,6 +351,14 @@ impl ChuteIndex {
             HouseIndex::Block(block) => self.contains_block(block),
         }
     }
+
+}
+
+impl SudokuRegion for ChuteIndex {
+    const CELL_COUNT: usize = 9*3;
+    fn cell_index(&self, flat_index: usize) -> CellIndex {
+        self.block(flat_index/9).cell_index(flat_index % 9)
+    }
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
@@ -225,23 +370,23 @@ pub enum HouseIndex {
 
 impl HouseIndex {
     pub fn iter() -> impl Iterator<Item=HouseIndex> {
-        RowIndex::iter().map(|idx| HouseIndex::Row(idx))
-            .chain(ColumnIndex::iter().map(|idx| HouseIndex::Column(idx)))
-            .chain(BlockIndex::iter().map(|idx| HouseIndex::Block(idx)))
+        RowIndex::iter().map(HouseIndex::Row)
+            .chain(ColumnIndex::iter().map(HouseIndex::Column))
+            .chain(BlockIndex::iter().map(HouseIndex::Block))
     }
 
     pub fn rows_and_columns() ->  impl Iterator<Item=HouseIndex> {
-        RowIndex::iter().map(|idx| HouseIndex::Row(idx))
-            .chain(ColumnIndex::iter().map(|idx| HouseIndex::Column(idx)))
+        RowIndex::iter().map(HouseIndex::Row)
+            .chain(ColumnIndex::iter().map(HouseIndex::Column))
     }
 
-    pub fn crossed_by(&self, idx: usize) -> Option<HouseIndex> {
-        match self {
-            HouseIndex::Column(h) => Some(h.cell_index(idx).row().into()),
-            HouseIndex::Row(h) => Some(h.cell_index(idx).column().into()),
-            HouseIndex::Block(_) => None,
-        }
-    }
+    // pub fn crossed_by(&self, idx: usize) -> Option<HouseIndex> {
+    //     match self {
+    //         HouseIndex::Column(h) => Some(h.cell_index(idx).row().into()),
+    //         HouseIndex::Row(h) => Some(h.cell_index(idx).column().into()),
+    //         HouseIndex::Block(_) => None,
+    //     }
+    // }
 }
 
 impl core::convert::From<RowIndex> for HouseIndex {
@@ -256,7 +401,8 @@ impl core::convert::From<BlockIndex> for HouseIndex {
     fn from(value: BlockIndex) -> Self { HouseIndex::Block(value) }
 }
 
-impl HouseIndexer for HouseIndex {
+impl SudokuRegion for HouseIndex {
+    const CELL_COUNT: usize = 9;
     fn cell_index(&self, idx: usize) -> CellIndex {
         match self {
             HouseIndex::Block(inner) => inner.cell_index(idx),
@@ -272,41 +418,41 @@ pub struct CellIndex(RowIndex, ColumnIndex);
 impl CellIndex {
     pub const COUNT: usize = ColumnIndex::COUNT * RowIndex::COUNT;
 
-    pub fn new(r: RowIndex, c: ColumnIndex) -> Self {
+    pub const fn new(r: RowIndex, c: ColumnIndex) -> Self {
         CellIndex(r, c)
     }
 
-    pub fn row(&self) -> RowIndex {
+    pub const fn row(&self) -> RowIndex {
         self.0
     }
 
-    pub fn column(&self) -> ColumnIndex {
+    pub const fn column(&self) -> ColumnIndex {
         self.1
     }
 
-    pub fn block(&self) -> BlockIndex {
+    pub const fn block(&self) -> BlockIndex {
         let r = self.0.index();
         let c = self.1.index();
 
-        BlockIndex::new(r, c)
+        BlockIndex::new(r/3, c/3)
     }
 
-    pub fn flat(&self) -> usize {
+    pub const fn flat(&self) -> usize {
         self.0.index() * 9 + self.1.index()
     }
 
-    pub fn houses(&self) -> [HouseIndex; 3] {
+    pub const fn houses(&self) -> [HouseIndex; 3] {
         [
-            HouseIndex::from(self.row()),
-            HouseIndex::from(self.column()),
-            HouseIndex::from(self.block()),
+            HouseIndex::Row(self.row()),
+            HouseIndex::Column(self.column()),
+            HouseIndex::Block(self.block()),
         ]
     }
 
-    pub fn share_house(&self, other: &CellIndex) -> bool {
-        self.row() == other.row() ||
-        self.column() == other.column() ||
-        self.block() == other.block()
+    pub const fn share_house(&self, other: &CellIndex) -> bool {
+        self.row().index() == other.row().index() ||
+            self.column().index() == other.column().index() ||
+            self.block().flat_index() == other.block().flat_index()
     }
 
     pub fn shared_houses(&self, other: &CellIndex) -> Vec<HouseIndex> {
@@ -330,7 +476,7 @@ impl CellIndex {
         for i in 0..shared_houses.len() {
             let &house = &shared_houses[i];
             let others = &shared_houses[i+1..];
-            cells.extend(house.cell_indices().into_iter().filter(|idx|{
+            cells.extend(house.cell_indices().filter(|idx|{
                 (idx != self) && (idx != other) && !others.iter().any(|h| h.contains(*idx))
             }));
         }
@@ -343,55 +489,134 @@ impl CellIndex {
         cells
     }
 
-    pub fn from_flat(i: usize) -> CellIndex{
+    pub const fn from_flat(i: usize) -> CellIndex{
         assert!(i < Self::COUNT);
         unsafe { Self::from_flat_unchecked(i) }
     }
 
-    unsafe fn from_flat_unchecked(i: usize) -> CellIndex {
+    const unsafe fn from_flat_unchecked(i: usize) -> CellIndex {
         let r = i / ColumnIndex::COUNT;
         let c = i % ColumnIndex::COUNT;
         CellIndex(RowIndex::new(r), ColumnIndex::new(c))
     }
 
-    pub fn domain() -> impl Iterator<Item = CellIndex> {
+    pub fn iter() -> impl Iterator<Item = CellIndex> {
         (0..Self::COUNT).map(|i| unsafe { Self::from_flat_unchecked(i) })
     }
-}
 
-pub trait CellIndexIter {
-    fn share_row(self) -> bool;
-    fn share_column(self) -> bool;
-    fn share_block(self) -> bool;
-    fn share_house(self) -> bool;
-}
-
-impl<T> CellIndexIter for T
-where 
-    T: Iterator<Item=CellIndex>
-{
-    fn share_row(self) -> bool {
-        self.map(|idx| idx.row()).all_equal()
-    }
-
-    fn share_column(self) -> bool {
-        self.map(|idx| idx.column()).all_equal()
-    }
-
-    fn share_block(self) -> bool {
-        self.map(|idx| idx.block()).all_equal()
-    }
-
-    fn share_house(self) -> bool {
-        let (rows, columns, blocks) = self.fold((SudokuFlags::ZERO, SudokuFlags::ZERO, SudokuFlags::ZERO), 
-            |(mut rows, mut columns, mut blocks), idx|{
-                rows.set(idx.row().index(), true);
-                columns.set(idx.column().index(), true);
-                blocks.set(idx.block().flat_index(), true);
-                (rows, columns, blocks)
-            });
-        rows.count_ones() == 1 || columns.count_ones() == 1 || blocks.count_ones() == 1
+    pub const fn line(&self, direction: LineDirection) -> HouseIndex {
+        match direction {
+            LineDirection::Horizontal => HouseIndex::Row(self.row()),
+            LineDirection::Vertical => HouseIndex::Column(self.column()),
+        }
     }
 }
+
+// pub trait CellIndexIter {
+//     fn share_row(self) -> bool;
+//     fn share_column(self) -> bool;
+//     fn share_block(self) -> bool;
+//     fn share_house(self) -> bool;
+// }
+
+// impl<T> CellIndexIter for T
+// where 
+//     T: Iterator<Item=CellIndex>
+// {
+//     fn share_row(self) -> bool {
+//         self.map(|idx| idx.row()).all_equal()
+//     }
+
+//     fn share_column(self) -> bool {
+//         self.map(|idx| idx.column()).all_equal()
+//     }
+
+//     fn share_block(self) -> bool {
+//         self.map(|idx| idx.block()).all_equal()
+//     }
+
+//     fn share_house(self) -> bool {
+//         let (rows, columns, blocks) = self.fold((SudokuFlags::ZERO, SudokuFlags::ZERO, SudokuFlags::ZERO), 
+//             |(mut rows, mut columns, mut blocks), idx|{
+//                 rows.set(idx.row().index(), true);
+//                 columns.set(idx.column().index(), true);
+//                 blocks.set(idx.block().flat_index(), true);
+//                 (rows, columns, blocks)
+//             });
+//         rows.count_ones() == 1 || columns.count_ones() == 1 || blocks.count_ones() == 1
+//     }
+// }
 
 pub type SudokuSubCellIndex = (CellIndex, DigitIndex);
+
+pub trait RegionIntersection<Rhs> {
+    fn intersect(&self, rhs: &Rhs) -> Vec<CellIndex>;
+}
+
+macro_rules! impl_symmetrical_intersect {
+    ($t:ty => $s:ty) => {
+        impl RegionIntersection<$t> for $s {
+            fn intersect(&self, other: &$t) -> Vec<CellIndex> {
+                RegionIntersection::<$s>::intersect(other, self)
+            }
+        }
+    }
+}
+
+impl RegionIntersection<RowIndex> for ColumnIndex {
+    fn intersect(&self, row: &RowIndex) -> Vec<CellIndex> {
+        vec![CellIndex::new(*row, *self)]
+    }
+}
+impl_symmetrical_intersect!(ColumnIndex => RowIndex);
+
+impl RegionIntersection<ColumnIndex> for BlockIndex {
+    fn intersect(&self, column: &ColumnIndex) -> Vec<CellIndex> {
+        column.cell_indices().filter(|idx| idx.block() == *self).collect()
+    }
+}
+impl_symmetrical_intersect!(BlockIndex => ColumnIndex);
+
+impl RegionIntersection<RowIndex> for BlockIndex {
+    fn intersect(&self, row: &RowIndex) -> Vec<CellIndex> {
+        row.cell_indices().filter(|idx| idx.block() == *self).collect()
+    }
+}
+impl_symmetrical_intersect!(BlockIndex => RowIndex);
+
+impl RegionIntersection<RowIndex> for RowIndex {
+    fn intersect(&self, other: &RowIndex) -> Vec<CellIndex> {
+        if self == other { self.cell_indices().collect() } else { Vec::new() }
+    }
+}
+
+impl RegionIntersection<ColumnIndex> for ColumnIndex {
+    fn intersect(&self, other: &ColumnIndex) -> Vec<CellIndex> {
+        if self == other { self.cell_indices().collect() } else { Vec::new() }
+    }
+}
+
+impl RegionIntersection<BlockIndex> for BlockIndex {
+    fn intersect(&self, other: &BlockIndex) -> Vec<CellIndex> {
+        if self == other { self.cell_indices().collect() } else { Vec::new() }
+    }
+}
+
+macro_rules! impl_house_intersect {
+    ($($t:ty)*) => ($(
+        impl RegionIntersection<$t> for HouseIndex {
+            fn intersect(&self, rhs: &$t) -> Vec<CellIndex> {
+                match self {
+                    HouseIndex::Block(b) => b.intersect(rhs),
+                    HouseIndex::Column(c) => c.intersect(rhs),
+                    HouseIndex::Row(r) => r.intersect(rhs),
+                }
+            }
+        }
+    )*);
+}
+
+impl_house_intersect!(RowIndex ColumnIndex BlockIndex HouseIndex);
+impl_symmetrical_intersect!(HouseIndex => RowIndex);
+impl_symmetrical_intersect!(HouseIndex => ColumnIndex);
+impl_symmetrical_intersect!(HouseIndex => BlockIndex);
