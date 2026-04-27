@@ -1,9 +1,12 @@
+use std::ops::{Add, BitOr};
+
 use itertools::Itertools;
 use strum::{EnumIter, EnumCount};
 use strum::IntoEnumIterator;
 
-use crate::board::{SudokuFlags, SudokuBoard, DigitMask};
-use crate::index::{BlockIndex, CellIndex, ChuteIndex, ColumnIndex, DigitIndex, HouseIndex, SudokuRegion, RowIndex, RegionIntersection, LineDirection};
+use crate::board::{SudokuBoard, SudokuBoardIter};
+use crate::flags::{ColumnFlags, RowFlags, BlockFlags, DigitFlags, SudokuFlags};
+use crate::index::{BlockIndex, CellIndex, ChuteIndex, DigitIndex, HouseIndex, SudokuRegion, HouseRegion, RegionIntersection, LineDirection, SudokuIndex};
 use crate::error::SudokuError;
 use crate::display::Highlight;
 use crate::graph::Graph;
@@ -36,7 +39,7 @@ fn solve_backtrack(board: SudokuBoard) -> Option<SudokuBoard> {
             if cell.is_digit() { continue }
             for digit in cell.digits() {
                 let mut next = board.clone();
-                next[cell_idx].apply_mask(&DigitMask::only(digit));
+                next[cell_idx].apply_mask(&DigitFlags::only(digit));
                 stack.push(next);
             }
         }
@@ -150,49 +153,46 @@ impl Strategy {
 }
 
 fn apply_primaries(board: &mut SudokuBoard) -> StrategyResult {
-    let primary_cells: Vec<_> = board.indexed_iter().filter_map(|(cell_idx, cell)| {
-        cell.digit_value().map(move |d| (cell_idx, d))
-    }).collect();
+    let primary_cells: Vec<_> = board.primaries().collect();
 
-    let mut rows_highlight = SudokuFlags::ZERO;
-    let mut columns_highlight = SudokuFlags::ZERO;
-    let mut blocks_highlight = SudokuFlags::ZERO;
+    let mut rows_highlight = RowFlags::ZERO;
+    let mut columns_highlight = ColumnFlags::ZERO;
+    let mut blocks_highlight = BlockFlags::ZERO;
 
     let mut highlights = Vec::new();
-    for primary in primary_cells {
-        let (primary_cell_idx, d) = primary;
+    for (primary_cell_idx, digit) in primary_cells {
         let mut relevant_digit = false;
 
-        let mask = DigitMask::all_but(d);
+        let mask = DigitFlags::all_but(digit);
         for house in primary_cell_idx.houses() {
             for (cell_idx, cell) in board.indexed_region_mut(&house) {
                 if cell_idx == primary_cell_idx { continue }
                 if cell.apply_mask(&mask) {
                     relevant_digit = true;
                     match house {
-                        HouseIndex::Block(b) => blocks_highlight.set(b.flat_index(), true),
-                        HouseIndex::Column(c) => columns_highlight.set(c.index(), true),
-                        HouseIndex::Row(r) => rows_highlight.set(r.index(), true),
+                        HouseIndex::Block(b) => blocks_highlight += b,
+                        HouseIndex::Column(c) => columns_highlight += c,
+                        HouseIndex::Row(r) => rows_highlight += r,
                     }
                 }
             }
         }
         if relevant_digit {
-            highlights.push(primary.into());
+            highlights.push((primary_cell_idx, digit).into());
         }
     }
 
     highlights.extend(
-        rows_highlight.iter_ones()
-            .map(|i| { Highlight::from(HouseIndex::from(RowIndex::new(i))) })
+        rows_highlight.iter()
+            .map(|i| { Highlight::from(HouseIndex::from(i)) })
     );
     highlights.extend(
-        columns_highlight.iter_ones()
-            .map(|i| { Highlight::from(HouseIndex::from(ColumnIndex::new(i))) })
+        columns_highlight.iter()
+            .map(|i| { Highlight::from(HouseIndex::from(i)) })
     );
     highlights.extend(
-        blocks_highlight.iter_ones()
-            .map(|i| { Highlight::from(HouseIndex::from(BlockIndex::from_flat_index(i))) })
+        blocks_highlight.iter()
+            .map(|i| { Highlight::from(HouseIndex::from(i)) })
     );
     if !highlights.is_empty() {
         StrategyResult::Advanced(highlights)
@@ -211,14 +211,13 @@ fn apply_naked_group(board: &mut SudokuBoard, n: usize) -> StrategyResult {
 
         let candidate_groups: Vec<_> = candidate_cells.into_iter().combinations(n)
             .filter_map(|indices|{
-                let digits = indices.iter().map(|idx| board[*idx])
-                    .fold(SudokuFlags::ZERO, |acc, d| acc | d.digit_flags());
-                (digits.count_ones() == n).then_some((digits, indices))
+                let digits = indices.iter().cloned().digits(board);
+                (digits.count() == n).then_some((digits, indices))
             }).collect();
 
         for (digits, indices) in candidate_groups {
             let mut changed: bool = false;
-            let mask = DigitMask::new(!digits);
+            let mask = !digits;
             for (idx, cell) in board.indexed_region_mut(&house_idx) {
                 if indices.contains(&idx) { continue }
                 changed |= cell.apply_mask(&mask);
@@ -227,11 +226,10 @@ fn apply_naked_group(board: &mut SudokuBoard, n: usize) -> StrategyResult {
             if changed {
                 let mut highlights = Vec::new();
                 highlights.push(house_idx.into());
-                for d in digits.iter_ones() {
-                    let d = DigitIndex::new(d);
+                for digit in digits.iter() {
                     for idx in indices.iter() {
-                        if board[idx].contains(d) {
-                            highlights.push((*idx, d).into());
+                        if board[idx].contains(digit) {
+                            highlights.push((*idx, digit).into());
                         }
                     }
                 }
@@ -248,39 +246,31 @@ fn apply_hidden_group(board: &mut SudokuBoard, n: usize) -> StrategyResult {
         let candidates = {
 
             // for each digit, get which cells in the house contain them
-            let digit_cells = {
-                let mut digit_cells = [SudokuFlags::default(); DigitIndex::COUNT];
-                for (idx, cell) in board.region(&house_idx).enumerate() {
-                    for digit in DigitIndex::iter() {
-                        digit_cells[digit.index()].set(idx, cell.contains(digit))
-                    }
-                }
-                digit_cells
-            };
+            let digit_cells: Vec<_> = DigitIndex::iter()
+                .map(|digit|{ board.cells_with(&house_idx, digit) })
+                .collect();
 
             // Filter out digits that are not possible as they appear in more than n cells or they belong
             // to an already set cell (i.e. cell with a single digit).
             // Neither condition is strictly necessary, but they will reduce the search space.
             let digit_cells: Vec<_> = digit_cells.into_iter().enumerate()
                 .filter(|(_, which_cells)| {
-                    (which_cells.count_ones() <= n) && which_cells.iter_ones().all(|i| !board[house_idx.cell_index(i)].is_digit())
+                    (which_cells.count() <= n) && which_cells.iter().all(|i| !board[house_idx.get(i)].is_digit())
                 })
                 .map(|(d, which_cells)| {
-                    let mut flags = SudokuFlags::ZERO;
-                    flags.set(d, true);
-                    (flags, which_cells)
+                    (DigitFlags::only(DigitIndex::new(d).unwrap()), which_cells)
                 }).collect();
 
             if digit_cells.len() < n { continue }
 
             // merge cells into cell groups (n-1) times, so that we get all the hidden groups
-            let mut candidates = vec![ (SudokuFlags::ZERO, SudokuFlags::ZERO) ];
+            let mut candidates = vec![ (DigitFlags::ZERO, SudokuFlags::ZERO) ];
             for _ in 0..n {
                 candidates = candidates.into_iter().flat_map(|(digits, cells)|{
                     digit_cells.iter().filter_map(move |(d, c)|{
-                        let new_digit = (digits & d) == SudokuFlags::ZERO;
-                        let compatible = (cells | c).count_ones() <= n;
-                        (new_digit && compatible).then_some((digits | d, cells | c))
+                        let new_digit = (digits & *d) == DigitFlags::ZERO;
+                        let compatible = (cells | *c).count() <= n;
+                        (new_digit && compatible).then_some((digits | *d, cells | *c))
                     })
                 }).collect();
             }
@@ -288,22 +278,21 @@ fn apply_hidden_group(board: &mut SudokuBoard, n: usize) -> StrategyResult {
         };
 
         for (digits, cells) in candidates {
-            let mask = DigitMask::new(digits);
+            let mask = digits;
             let mut changed = false;
-            for cell_idx in cells.iter_ones() {
-                let cell_idx = house_idx.cell_index(cell_idx);
+            for cell_idx in cells.iter() {
+                let cell_idx = house_idx.get(cell_idx);
                 changed |= board[cell_idx].apply_mask(&mask);
             }
 
             if changed {
                 let mut highlights = Vec::new();
                 highlights.push(house_idx.into());
-                for d in digits.iter_ones() {
-                    let d = DigitIndex::new(d);
-                    for cell_idx in cells.iter_ones() {
-                        let cell_idx = house_idx.cell_index(cell_idx);
-                        if board[cell_idx].contains(d) {
-                            highlights.push((cell_idx, d).into());
+                for digit in digits.iter() {
+                    for cell_idx in cells.iter() {
+                        let cell_idx = house_idx.get(cell_idx);
+                        if board[cell_idx].contains(digit) {
+                            highlights.push((cell_idx, digit).into());
                         }
                     }
                 }
@@ -340,7 +329,7 @@ fn apply_locked_candidates_pointing(board: &mut SudokuBoard) -> StrategyResult {
                 };
 
             if let Some((claiming_house, cells)) = claiming_house {
-                let mask = DigitMask::all_but(digit);
+                let mask = DigitFlags::all_but(digit);
                 let mut changed = false;
                 for idx in claiming_house.cell_indices() {
                     if idx.block() == block { continue }
@@ -370,7 +359,7 @@ fn apply_locked_candidates_claiming(board: &mut SudokuBoard) -> StrategyResult {
             if cells.is_empty() || !same_block { continue }
             let block = cells.first().unwrap().block();
 
-            let mask = DigitMask::all_but(digit);
+            let mask = DigitFlags::all_but(digit);
             let mut changed = false;
             for idx in block.cell_indices() {
                 if house_idx.contains(idx) { continue }
@@ -390,18 +379,18 @@ fn apply_locked_candidates_claiming(board: &mut SudokuBoard) -> StrategyResult {
 }
 
 fn apply_xwing(board: &mut SudokuBoard) -> StrategyResult {
-    for d in DigitIndex::iter() {
+    for digit in DigitIndex::iter() {
         for search_direction in LineDirection::iter() {
             let search_houses = search_direction.lines();
             let perpendicular_direction = search_direction.other();
-            let appear_in: Vec<_> = search_houses.into_iter().map(|idx|{
-                    let appear = board.region(&idx).enumerate().fold(SudokuFlags::ZERO, |mut acc, (flat_idx, cell_value)|{
-                        acc.set(flat_idx, cell_value.contains(d));
-                        acc
-                    });
-                    (idx, appear)
+            let appear_in: Vec<_> = search_houses.into_iter().map(|house_idx|{
+                    let appear = board.region(&house_idx).enumerate()
+                        .filter(|(_, cell_value)| cell_value.contains(digit))
+                        .map(|(idx, _)| SudokuIndex::new(idx).unwrap())
+                        .fold(SudokuFlags::ZERO, SudokuFlags::add);
+                    (house_idx, appear)
                 })
-                .filter(|(_, appear)| appear.count_ones() == 2)
+                .filter(|(_, appear)| appear.count() == 2)
                 .collect();
             let candidate_pairs = appear_in.into_iter().combinations(2).filter(|pair| pair[0].1 == pair[1].1);
             for candidate in candidate_pairs {
@@ -410,11 +399,11 @@ fn apply_xwing(board: &mut SudokuBoard) -> StrategyResult {
                 let appear = candidate[0].1;
 
                 let mut changed = false;
-                let mask: DigitMask = DigitMask::all_but(d);
-                for i in appear.iter_ones() {
+                let mask = DigitFlags::all_but(digit);
+                for i in appear.iter() {
                     for h in [
-                                h0.cell_index(i).line(perpendicular_direction),
-                                h1.cell_index(i).line(perpendicular_direction),
+                                h0.get(i).line(perpendicular_direction),
+                                h1.get(i).line(perpendicular_direction),
                             ] {
                         for (cell_idx, cell) in board.indexed_region_mut(&h) {
                             if h0.contains(cell_idx) || h1.contains(cell_idx) { continue }
@@ -427,11 +416,11 @@ fn apply_xwing(board: &mut SudokuBoard) -> StrategyResult {
                     let mut highlights = Vec::new();
                     highlights.push(h0.into());
                     highlights.push(h1.into());
-                    for i in appear.iter_ones() {
-                        highlights.push(h0.cell_index(i).line(perpendicular_direction).into());
-                        highlights.push(h1.cell_index(i).line(perpendicular_direction).into());
-                        highlights.push((h0.cell_index(i), d).into());
-                        highlights.push((h1.cell_index(i), d).into());
+                    for i in appear.iter() {
+                        highlights.push(h0.get(i).line(perpendicular_direction).into());
+                        highlights.push(h1.get(i).line(perpendicular_direction).into());
+                        highlights.push((h0.get(i), digit).into());
+                        highlights.push((h1.get(i), digit).into());
                     }
                     return StrategyResult::Advanced(highlights)
                 }
@@ -466,7 +455,7 @@ fn apply_remote_pairs(board: &mut SudokuBoard) -> StrategyResult {
     for (cell_value, cells) in bv_cells_groups {
         debug_assert!(cells.iter().all(|idx| board[idx] == cell_value));
 
-        let mask = DigitMask::new(!cell_value.digit_flags());
+        let mask = !cell_value.digit_flags();
         for graph in visibility_graphs(&cells) {
             if let Some((group_a, group_b)) = graph.two_colorize() {
                 for (&i, j) in group_a.iter().cartesian_product(group_b) {
@@ -528,20 +517,20 @@ fn apply_chute_remote_pair(board: &mut SudokuBoard, crp_type: CRPType) -> Strate
 
             let digits_in_other = line_other.intersect(&block_other).into_iter()
                     .map(|cell_idx| board[cell_idx].digit_flags())
-                    .fold(SudokuFlags::ZERO, |acc, flags| acc | flags)
+                    .fold(DigitFlags::ZERO, |acc, flags| acc | flags)
                 & cell.digit_flags();
 
             let mut changed = false;
-            if digits_in_other.count_ones() == 1 && crp_type == CRPType::Single {
+            if digits_in_other.count() == 1 && crp_type == CRPType::Single {
                 // chute remote pair (single)
-                let mask = DigitMask::new(!digits_in_other);
+                let mask = !digits_in_other;
                 let roi = block_0.intersect(&line_1).into_iter().chain(block_1.intersect(&line_0));
                 for cell_idx in roi {
                     changed |= board[cell_idx].apply_mask(&mask);
                 }
-            } else if digits_in_other.count_ones() == 0 && crp_type == CRPType::Double {
+            } else if digits_in_other.count() == 0 && crp_type == CRPType::Double {
                 // chute remote pair (double)
-                let mask = DigitMask::new(!cell.digit_flags());
+                let mask = !cell.digit_flags();
                 let roi = line_0.cell_indices().filter(|idx| idx != &cell_0 && idx.block() != block_other)
                     .chain(line_1.cell_indices().filter(|idx| idx != &cell_1 && idx.block() != block_other));
                 for cell_idx in roi {
@@ -555,7 +544,7 @@ fn apply_chute_remote_pair(board: &mut SudokuBoard, crp_type: CRPType) -> Strate
                     highlights.push((cell_0, digit).into());
                     highlights.push((cell_1, digit).into());
                 }
-                for digit in digits_in_other.iter_ones().map(DigitIndex::new) {
+                for digit in digits_in_other.iter() {
                     for cell in line_other.intersect(&block_other) {
                         highlights.push((cell, digit).into());
                     }

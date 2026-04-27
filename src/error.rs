@@ -13,4 +13,6 @@ pub enum SudokuError {
     XmlError(#[from] xml::reader::Error),
     #[error("could not find boards")]
     NoBoardFound,
+    #[error("value {0} is not valid")]
+    InvalidValue(usize),
 }

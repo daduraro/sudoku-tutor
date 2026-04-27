@@ -5,6 +5,7 @@ mod strategy;
 mod display;
 mod index;
 mod graph;
+mod flags;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
