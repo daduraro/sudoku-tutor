@@ -1,4 +1,4 @@
-use std::ops::{Add, BitOr};
+use std::ops::{Add, ControlFlow};
 
 use itertools::Itertools;
 use strum::{EnumIter, EnumCount};
@@ -11,13 +11,12 @@ use crate::error::SudokuError;
 use crate::display::Highlight;
 use crate::graph::Graph;
 
+fn apply_strategies(board: &mut SudokuBoard, strategies: &[Strategy]) -> ControlFlow<(Strategy, Vec<Highlight>)> {
+    strategies.iter().try_for_each(|s| s.apply(board).map_break(|h| (*s, h)))
+}
+
 fn solve_with_strategies(board: &mut SudokuBoard, strategies: &[Strategy]) {
-    'step: loop {
-        for strategy in strategies {
-            if matches!(strategy.apply(board), StrategyResult::Advanced(_)) { continue 'step }
-        }
-        break
-    }
+    while !board.is_finished() && apply_strategies(board, strategies).is_break() {}
 }
 
 fn solve_backtrack(board: SudokuBoard) -> Option<SudokuBoard> {
@@ -45,12 +44,6 @@ fn solve_backtrack(board: SudokuBoard) -> Option<SudokuBoard> {
         }
     }
     None
-}
-
-#[derive(Clone, Debug)]
-pub enum StrategyResult {
-    Unaffected,
-    Advanced(Vec<Highlight>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, EnumIter, EnumCount)]
@@ -132,7 +125,7 @@ pub enum Strategy {
 }
 
 impl Strategy {
-    pub fn apply(&self, board: &mut SudokuBoard) -> StrategyResult {
+    pub fn apply(&self, board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
         match self {
             Strategy::Primaries => apply_primaries(board),
             Strategy::HiddenSingle => apply_hidden_group(board, 1),
@@ -152,7 +145,7 @@ impl Strategy {
     }
 }
 
-fn apply_primaries(board: &mut SudokuBoard) -> StrategyResult {
+fn apply_primaries(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
     let primary_cells: Vec<_> = board.primaries().collect();
 
     let mut rows_highlight = RowFlags::ZERO;
@@ -195,13 +188,13 @@ fn apply_primaries(board: &mut SudokuBoard) -> StrategyResult {
             .map(|i| { Highlight::from(HouseIndex::from(i)) })
     );
     if !highlights.is_empty() {
-        StrategyResult::Advanced(highlights)
+        ControlFlow::Break(highlights)
     } else {
-        StrategyResult::Unaffected
+        ControlFlow::Continue(())
     }
 }
 
-fn apply_naked_group(board: &mut SudokuBoard, n: usize) -> StrategyResult {
+fn apply_naked_group(board: &mut SudokuBoard, n: usize) -> ControlFlow<Vec<Highlight>> {
     assert!(1 < n && n < 9);
     for house_idx in HouseIndex::iter() {
         let candidate_cells: Vec::<_> = board.indexed_region(&house_idx).filter_map(|(idx, cell)| {
@@ -233,14 +226,14 @@ fn apply_naked_group(board: &mut SudokuBoard, n: usize) -> StrategyResult {
                         }
                     }
                 }
-                return StrategyResult::Advanced(highlights) // do not process more than one naked group
+                return ControlFlow::Break(highlights) // do not process more than one naked group
             }
         }
     }
-    StrategyResult::Unaffected
+    ControlFlow::Continue(())
 }
 
-fn apply_hidden_group(board: &mut SudokuBoard, n: usize) -> StrategyResult {
+fn apply_hidden_group(board: &mut SudokuBoard, n: usize) -> ControlFlow<Vec<Highlight>> {
     assert!(n < 9);
     for house_idx in HouseIndex::iter() {
         let candidates = {
@@ -297,14 +290,14 @@ fn apply_hidden_group(board: &mut SudokuBoard, n: usize) -> StrategyResult {
                     }
                 }
 
-                return StrategyResult::Advanced(highlights) // do not process more than one hidden group
+                return ControlFlow::Break(highlights) // do not process more than one hidden group
             }
         }
     }
-    StrategyResult::Unaffected
+    ControlFlow::Continue(())
 }
 
-fn apply_locked_candidates_pointing(board: &mut SudokuBoard) -> StrategyResult {
+fn apply_locked_candidates_pointing(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
     for block in BlockIndex::iter() {
         for digit in DigitIndex::iter() {
             let mut rows: Vec<_> = Vec::new();
@@ -341,15 +334,15 @@ fn apply_locked_candidates_pointing(board: &mut SudokuBoard) -> StrategyResult {
                     highlights.push(claiming_house.into());
                     highlights.push(block.into());
                     highlights.extend(cells.into_iter().map(|c| Highlight::Digit((c, digit))));
-                    return StrategyResult::Advanced(highlights)
+                    return ControlFlow::Break(highlights)
                 }
             }
         }
     }
-    StrategyResult::Unaffected
+    ControlFlow::Continue(())
 }
 
-fn apply_locked_candidates_claiming(board: &mut SudokuBoard) -> StrategyResult {
+fn apply_locked_candidates_claiming(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
     for house_idx in HouseIndex::rows_and_columns() {
         for digit in DigitIndex::iter() {
             let cells: Vec<_> = house_idx.cell_indices().filter(|idx|{
@@ -371,14 +364,14 @@ fn apply_locked_candidates_claiming(board: &mut SudokuBoard) -> StrategyResult {
                 highlights.push(house_idx.into());
                 highlights.push(block.into());
                 highlights.extend(cells.into_iter().map(|idx| Highlight::Digit((idx, digit))));
-                return StrategyResult::Advanced(highlights)
+                return ControlFlow::Break(highlights)
             }
         }
     }
-    StrategyResult::Unaffected
+    ControlFlow::Continue(())
 }
 
-fn apply_xwing(board: &mut SudokuBoard) -> StrategyResult {
+fn apply_xwing(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
     for digit in DigitIndex::iter() {
         for search_direction in LineDirection::iter() {
             let search_houses = search_direction.lines();
@@ -422,12 +415,12 @@ fn apply_xwing(board: &mut SudokuBoard) -> StrategyResult {
                         highlights.push((h0.get(i), digit).into());
                         highlights.push((h1.get(i), digit).into());
                     }
-                    return StrategyResult::Advanced(highlights)
+                    return ControlFlow::Break(highlights)
                 }
             }
         }
     }
-    StrategyResult::Unaffected
+    ControlFlow::Continue(())
 }
 
 fn visibility_graphs(indices: &[CellIndex]) -> Vec<Graph<CellIndex>> {
@@ -443,7 +436,7 @@ fn visibility_graphs(indices: &[CellIndex]) -> Vec<Graph<CellIndex>> {
     graph.split_connected_components()
 }
 
-fn apply_remote_pairs(board: &mut SudokuBoard) -> StrategyResult {
+fn apply_remote_pairs(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
     let bv_cells = CellIndex::iter().filter(|idx| board[idx].is_bivalue());
 
     let bv_cells_groups: Vec<_> = bv_cells
@@ -477,14 +470,14 @@ fn apply_remote_pairs(board: &mut SudokuBoard) -> StrategyResult {
                             highlights.push(graph[idx].into());
                         }
 
-                        return StrategyResult::Advanced(highlights)
+                        return ControlFlow::Break(highlights)
                     }
                 }
             }
         }
     }
 
-    StrategyResult::Unaffected
+    ControlFlow::Continue(())
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -493,7 +486,7 @@ enum CRPType {
     Double,
 }
 
-fn apply_chute_remote_pair(board: &mut SudokuBoard, crp_type: CRPType) -> StrategyResult {
+fn apply_chute_remote_pair(board: &mut SudokuBoard, crp_type: CRPType) -> ControlFlow<Vec<Highlight>> {
     for chute in ChuteIndex::iter() {
         let direction = chute.direction();
 
@@ -550,11 +543,11 @@ fn apply_chute_remote_pair(board: &mut SudokuBoard, crp_type: CRPType) -> Strate
                     }
                 }
                 highlights.extend(line_other.intersect(&block_other).into_iter().map(Highlight::from));
-                return StrategyResult::Advanced(highlights)
+                return ControlFlow::Break(highlights)
             }
         }
     }
-    StrategyResult::Unaffected
+    ControlFlow::Continue(())
 }
 
 #[derive(Debug, Clone)]
@@ -570,27 +563,25 @@ impl SolvedGame {
     }
 }
 
+
 pub fn solve(mut board: SudokuBoard) -> Result<SolvedGame, SudokuError>
 {
     let mut boards = Vec::<SudokuBoard>::new();
     let mut steps = Vec::<(Strategy, Vec<Highlight>)>::new();
 
-    'step: while !board.is_solved() {
+    let strategies : Vec<_> = Strategy::iter().collect();
+    while !board.is_finished() {
         if !board.is_valid() { return Err(SudokuError::UnsolvableSudoku) }
         let mut next = board.clone();
-        for s in Strategy::iter() {
-            if let StrategyResult::Advanced(highlights) = s.apply(&mut next) {
-                steps.push((s, highlights));
-                boards.push(board);
-                board = next;
-                continue 'step
-            } else {
-                debug_assert_eq!(board, next);
-            }
+        if let ControlFlow::Break(step) = apply_strategies(&mut next, &strategies) {
+            steps.push(step);
+            boards.push(board);
+            board = next;
+        } else {
+            // we did not advance
+            debug_assert_eq!(board, next);
+            break
         }
-
-        // we did not advance
-        break
     }
     // assert!(solve_backtrack(board.clone()).is_some());
 

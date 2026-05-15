@@ -90,6 +90,10 @@ impl SudokuBoard {
         })
     }
 
+    pub fn is_finished(&self) -> bool {
+        self.iter().all(|cell| cell.num_digits() <= 1)
+    }
+
     pub fn diff(&self, prev: &SudokuBoard) -> Vec<SudokuSubCellIndex> {
         zip(self.indexed_iter(), prev).flat_map(|((cell_idx, curr), prev)| {
             DigitIndex::iter().filter_map(move |d| {
