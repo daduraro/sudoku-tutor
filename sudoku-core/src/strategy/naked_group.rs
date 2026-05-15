@@ -6,7 +6,7 @@ use crate::board::{SudokuBoard, SudokuBoardIter};
 use crate::index::HouseIndex;
 use crate::highlight::Highlight;
 
-pub(super) fn apply_naked_group(board: &mut SudokuBoard, n: usize) -> ControlFlow<Vec<Highlight>> {
+pub fn apply_naked_group(board: &mut SudokuBoard, n: usize) -> ControlFlow<Vec<Highlight>> {
     assert!(1 < n && n < 9);
     for house_idx in HouseIndex::iter() {
         let candidate_cells: Vec::<_> = board.indexed_region(&house_idx).filter_map(|(idx, cell)| {

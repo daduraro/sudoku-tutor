@@ -9,12 +9,12 @@ use crate::index::{ChuteIndex, RegionIntersection, SudokuRegion};
 use crate::highlight::Highlight;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(super) enum CRPType {
+pub enum CRPType {
     Single,
     Double,
 }
 
-pub(super) fn apply_chute_remote_pair(board: &mut SudokuBoard, crp_type: CRPType) -> ControlFlow<Vec<Highlight>> {
+pub fn apply_chute_remote_pair(board: &mut SudokuBoard, crp_type: CRPType) -> ControlFlow<Vec<Highlight>> {
     for chute in ChuteIndex::iter() {
         let direction = chute.direction();
 

@@ -8,7 +8,7 @@ use crate::flags::{DigitFlags, SudokuFlags};
 use crate::index::{DigitIndex, HouseRegion, LineDirection, SudokuIndex, SudokuRegion};
 use crate::highlight::Highlight;
 
-pub(super) fn apply_xwing(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
+pub fn apply_xwing(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
     for digit in DigitIndex::iter() {
         for search_direction in LineDirection::iter() {
             let search_houses = search_direction.lines();

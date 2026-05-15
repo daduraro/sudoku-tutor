@@ -5,7 +5,7 @@ use crate::flags::{ColumnFlags, RowFlags, BlockFlags, DigitFlags};
 use crate::index::HouseIndex;
 use crate::highlight::Highlight;
 
-pub(super) fn apply_primaries(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
+pub fn apply_primaries(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
     let primary_cells: Vec<_> = board.primaries().collect();
 
     let mut rows_highlight = RowFlags::ZERO;

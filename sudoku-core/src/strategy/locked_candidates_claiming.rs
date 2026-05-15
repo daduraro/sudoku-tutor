@@ -6,7 +6,7 @@ use crate::flags::DigitFlags;
 use crate::index::{CellIndex, DigitIndex, HouseIndex, SudokuRegion};
 use crate::highlight::Highlight;
 
-pub(super) fn apply_locked_candidates_claiming(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
+pub fn apply_locked_candidates_claiming(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
     for house_idx in HouseIndex::rows_and_columns() {
         for digit in DigitIndex::iter() {
             let cells: Vec<_> = house_idx.cell_indices().filter(|idx|{

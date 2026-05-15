@@ -5,7 +5,7 @@ use crate::flags::DigitFlags;
 use crate::index::{BlockIndex, CellIndex, DigitIndex, HouseIndex, SudokuRegion};
 use crate::highlight::Highlight;
 
-pub(super) fn apply_locked_candidates_pointing(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
+pub fn apply_locked_candidates_pointing(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
     for block in BlockIndex::iter() {
         for digit in DigitIndex::iter() {
             let mut rows: Vec<_> = Vec::new();

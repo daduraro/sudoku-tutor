@@ -5,7 +5,7 @@ use crate::flags::{DigitFlags, SudokuFlags};
 use crate::index::{DigitIndex, HouseIndex, HouseRegion};
 use crate::highlight::Highlight;
 
-pub(super) fn apply_hidden_group(board: &mut SudokuBoard, n: usize) -> ControlFlow<Vec<Highlight>> {
+pub fn apply_hidden_group(board: &mut SudokuBoard, n: usize) -> ControlFlow<Vec<Highlight>> {
     assert!(n < 9);
     for house_idx in HouseIndex::iter() {
         let candidates = {

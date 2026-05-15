@@ -19,7 +19,7 @@ fn visibility_graphs(indices: &[CellIndex]) -> Vec<Graph<CellIndex>> {
     graph.split_connected_components()
 }
 
-pub(super) fn apply_remote_pairs(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
+pub fn apply_remote_pairs(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
     let bv_cells = CellIndex::iter().filter(|idx| board[idx].is_bivalue());
 
     let bv_cells_groups: Vec<_> = bv_cells
