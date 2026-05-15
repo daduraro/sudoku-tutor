@@ -5,34 +5,9 @@ use ratatui::{Frame};
 use ratatui::layout::{Offset, Rect, Size};
 use tui_big_text::{BigText, PixelSize};
 
-use crate::board::{SudokuBoard};
-use crate::index::{CellIndex, DigitIndex, HouseIndex, SudokuRegion, SudokuSubCellIndex};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Highlight {
-    Digit(SudokuSubCellIndex),
-    House(HouseIndex),
-    Cell(CellIndex),
-}
-
-impl<Idx> core::convert::From<Idx> for Highlight 
-where Idx: core::convert::Into<HouseIndex> {
-    fn from(value: Idx) -> Self {
-        Highlight::House(value.into())
-    }
-}
-
-impl core::convert::From<SudokuSubCellIndex> for Highlight {
-    fn from(value: SudokuSubCellIndex) -> Self {
-        Highlight::Digit(value)
-    }
-}
-
-impl core::convert::From<CellIndex> for Highlight {
-    fn from(value: CellIndex) -> Self {
-        Highlight::Cell(value)
-    }
-}
+use sudoku_core::board::SudokuBoard;
+use sudoku_core::index::{CellIndex, DigitIndex, HouseIndex, SudokuRegion, SudokuSubCellIndex};
+use sudoku_core::highlight::Highlight;
 
 fn render_cell(
     board: &SudokuBoard,

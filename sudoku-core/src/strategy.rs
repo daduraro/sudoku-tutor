@@ -8,7 +8,7 @@ use crate::board::{SudokuBoard, SudokuBoardIter};
 use crate::flags::{ColumnFlags, RowFlags, BlockFlags, DigitFlags, SudokuFlags};
 use crate::index::{BlockIndex, CellIndex, ChuteIndex, DigitIndex, HouseIndex, SudokuRegion, HouseRegion, RegionIntersection, LineDirection, SudokuIndex};
 use crate::error::SudokuError;
-use crate::display::Highlight;
+use crate::highlight::Highlight;
 use crate::graph::Graph;
 
 fn apply_strategies(board: &mut SudokuBoard, strategies: &[Strategy]) -> ControlFlow<(Strategy, Vec<Highlight>)> {

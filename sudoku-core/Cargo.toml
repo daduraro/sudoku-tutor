@@ -1,0 +1,11 @@
+[package]
+name = "sudoku-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+itertools = "0.14.0"
+log = "0.4.29"
+strum = { version = "0.28.0", features = ["derive"] }
+thiserror = "2.0.18"
+xml = "1.0"

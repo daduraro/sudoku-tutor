@@ -1,11 +1,4 @@
-mod board;
-mod io;
-mod error;
-mod strategy;
 mod display;
-mod index;
-mod graph;
-mod flags;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -20,10 +13,11 @@ use crossterm::event::{KeyCode};
 use rayon::prelude::*;
 use strum::{EnumCount, IntoEnumIterator};
 
-use crate::board::{SudokuBoard};
+use sudoku_core::board::SudokuBoard;
+use sudoku_core::strategy::{solve, SolvedGame, Strategy};
+use sudoku_core::error::SudokuError;
+
 use crate::display::render_sudoku_board;
-use crate::strategy::{solve, SolvedGame, Strategy};
-use crate::error::SudokuError;
 
 #[derive(clap::Parser)]
 #[command(version, about, long_about = None)]
@@ -378,7 +372,7 @@ fn load_games(terminal: &mut DefaultTerminal, file_paths: &[PathBuf], sequential
     let games = {
         let mut games = Vec::<SudokuBoard>::new();
         for fpath in file_paths {
-            games.extend(crate::io::load_games(fpath))
+            games.extend(sudoku_core::io::load_games(fpath))
         }
         // games = vec![games.into_iter().nth(4).unwrap()];
         games

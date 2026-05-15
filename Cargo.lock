@@ -533,15 +533,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
-name = "ena"
-version = "0.14.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eabffdaee24bd1bf95c5ef7cec31260444317e72ea56c4c91750e8b7ee58d5f1"
-dependencies = [
- "log",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1583,6 +1574,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sudoku-core"
+version = "0.1.0"
+dependencies = [
+ "itertools",
+ "log",
+ "strum 0.28.0",
+ "thiserror 2.0.18",
+ "xml",
+]
+
+[[package]]
 name = "sudoku-tutor"
 version = "0.1.0"
 dependencies = [
@@ -1590,17 +1592,13 @@ dependencies = [
  "clap",
  "color-eyre",
  "crossterm",
- "ena",
- "itertools",
- "log",
  "ratatui",
  "rayon",
  "rayon-progress",
  "strum 0.28.0",
- "thiserror 2.0.18",
+ "sudoku-core",
  "tui-big-text",
  "tui-input",
- "xml",
 ]
 
 [[package]]
