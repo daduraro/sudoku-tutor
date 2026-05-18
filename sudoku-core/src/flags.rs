@@ -22,8 +22,10 @@ macro_rules! sudoku_flags {
                 (self.0 & (1 << idx)) != 0
             }
 
-            pub fn iter(&self) -> impl Iterator<Item=$idx> {
-                (0..9).filter(|i| self.select_unchecked(*i)).map(|i| $idx::new(i).unwrap())
+            pub fn iter(&self) -> impl Iterator<Item = $idx> {
+                (0..9)
+                    .filter(|i| self.select_unchecked(*i))
+                    .map(|i| $idx::new(i).unwrap())
             }
 
             pub const fn any(&self) -> bool {
@@ -56,12 +58,14 @@ macro_rules! sudoku_flags {
 
         impl core::ops::Add<$idx> for $t {
             type Output = Self;
+            #[allow(clippy::suspicious_arithmetic_impl)]
             fn add(self, index: $idx) -> Self::Output {
                 self | Self::only(index)
             }
         }
 
         impl core::ops::AddAssign<$idx> for $t {
+            #[allow(clippy::suspicious_op_assign_impl)]
             fn add_assign(&mut self, rhs: $idx) {
                 *self |= Self::only(rhs);
             }
@@ -69,12 +73,14 @@ macro_rules! sudoku_flags {
 
         impl core::ops::Sub<$idx> for $t {
             type Output = Self;
+            #[allow(clippy::suspicious_arithmetic_impl)]
             fn sub(self, index: $idx) -> Self::Output {
                 self & Self::all_but(index)
             }
         }
 
         impl core::ops::SubAssign<$idx> for $t {
+            #[allow(clippy::suspicious_op_assign_impl)]
             fn sub_assign(&mut self, rhs: $idx) {
                 *self &= Self::all_but(rhs);
             }
@@ -134,4 +140,3 @@ sudoku_flags!(BlockFlags BlockIndex);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Debug)]
 pub struct SudokuFlags(u16);
 sudoku_flags!(SudokuFlags SudokuIndex);
-

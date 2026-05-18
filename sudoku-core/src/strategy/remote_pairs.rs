@@ -1,23 +1,11 @@
 use std::ops::ControlFlow;
 
-use itertools::Itertools;
+use super::common::visibility_graphs;
 use crate::board::SudokuBoard;
-use crate::index::CellIndex;
+use crate::graph::TwoColorized;
 use crate::highlight::Highlight;
-use crate::graph::Graph;
-
-fn visibility_graphs(indices: &[CellIndex]) -> Vec<Graph<CellIndex>> {
-    let mut graph = Graph::new(indices.to_vec(), Vec::new());
-    for i in 0..graph.len() {
-        for j in (i+1)..graph.len() {
-            if graph[i].visible(&graph[j]) {
-                graph.add_edge(i, j);
-            }
-        }
-    }
-
-    graph.split_connected_components()
-}
+use crate::index::CellIndex;
+use itertools::Itertools;
 
 pub fn apply_remote_pairs(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>> {
     let bv_cells = CellIndex::iter().filter(|idx| board[idx].is_bivalue());
@@ -26,14 +14,13 @@ pub fn apply_remote_pairs(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>
         .into_group_map_by(|idx| board[idx])
         .into_iter()
         .filter(|(_, v)| v.len() >= 3)
-        .collect()
-        ;
+        .collect();
     for (cell_value, cells) in bv_cells_groups {
         debug_assert!(cells.iter().all(|idx| board[idx] == cell_value));
 
         let mask = !cell_value.digit_flags();
         for graph in visibility_graphs(&cells) {
-            if let Some((group_a, group_b)) = graph.two_colorize() {
+            if let TwoColorized::Consistent(group_a, group_b) = graph.two_colorize() {
                 for (&i, j) in group_a.iter().cartesian_product(group_b) {
                     let c0 = graph[i];
                     let c1 = graph[j];
@@ -53,7 +40,7 @@ pub fn apply_remote_pairs(board: &mut SudokuBoard) -> ControlFlow<Vec<Highlight>
                             highlights.push(graph[idx].into());
                         }
 
-                        return ControlFlow::Break(highlights)
+                        return ControlFlow::Break(highlights);
                     }
                 }
             }

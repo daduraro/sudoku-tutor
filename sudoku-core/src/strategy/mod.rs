@@ -1,34 +1,40 @@
 use std::ops::ControlFlow;
 
-use strum::{EnumIter, EnumCount};
 use strum::IntoEnumIterator;
+use strum::{EnumCount, EnumIter};
 
 use crate::board::SudokuBoard;
 use crate::error::SudokuError;
 use crate::highlight::Highlight;
 
-mod primaries;
-mod naked_group;
-mod hidden_group;
-mod locked_candidates_pointing;
-mod locked_candidates_claiming;
-mod xwing;
-mod remote_pairs;
-mod chute_remote_pair;
 mod backtrack;
+mod chute_remote_pair;
+mod common;
+mod hidden_group;
+mod locked_candidates_claiming;
+mod locked_candidates_pointing;
+mod naked_group;
+mod primaries;
+// mod remote_pairs;
+mod simple_coloring;
+mod xwing;
 
-use primaries::apply_primaries;
-use naked_group::apply_naked_group;
-use hidden_group::apply_hidden_group;
-use locked_candidates_pointing::apply_locked_candidates_pointing;
-use locked_candidates_claiming::apply_locked_candidates_claiming;
-use xwing::apply_xwing;
-use remote_pairs::apply_remote_pairs;
-use chute_remote_pair::{apply_chute_remote_pair, CRPType};
 use backtrack::solve_backtrack;
+use chute_remote_pair::{CRPType, apply_chute_remote_pair};
+use hidden_group::apply_hidden_group;
+use locked_candidates_claiming::apply_locked_candidates_claiming;
+use locked_candidates_pointing::apply_locked_candidates_pointing;
+use naked_group::apply_naked_group;
+use primaries::apply_primaries;
+use xwing::apply_xwing;
 
-fn apply_strategies(board: &mut SudokuBoard, strategies: &[Strategy]) -> ControlFlow<(Strategy, Vec<Highlight>)> {
-    strategies.iter().try_for_each(|s| s.apply(board).map_break(|h| (*s, h)))
+fn apply_strategies(
+    board: &mut SudokuBoard,
+    strategies: &[Strategy],
+) -> ControlFlow<(Strategy, Vec<Highlight>)> {
+    strategies
+        .iter()
+        .try_for_each(|s| s.apply(board).map_break(|h| (*s, h)))
 }
 
 fn solve_with_strategies(board: &mut SudokuBoard, strategies: &[Strategy]) {
@@ -58,7 +64,6 @@ pub enum Strategy {
     // row/column can be eliminated
     LockedCandidatePointing,
 
-
     // a candidate in a single row/column appear only in a block,
     // thus this candidate cannot appear in any other cell inside
     // the block
@@ -82,10 +87,9 @@ pub enum Strategy {
     // In particular, this chain link will make pairs in an odd distance to
     // be locked pairs themselves, and so any cell that sees both cannot have
     // either candidate.
-    RemotePair,
+    // RemotePair, // deprecated in favor of SimpleColoring
+    SimpleColoring,
 
-    // ColoringType1,
-    // ColoringType2,
     // TurbotSkyscraper,
     // Turbot2StringKate,
     // TurbotCrane,
@@ -127,14 +131,22 @@ impl Strategy {
 
     pub const fn is_safe(&self) -> bool {
         match self {
-            Strategy::Primaries 
-            | Strategy::HiddenSingle | Strategy::NakedPair | Strategy::HiddenPair
-            | Strategy::LockedCandidatePointing | Strategy::LockedCandidateClaiming 
-            | Strategy::XWing | Strategy::ChuteRemotePairDouble | Strategy::ChuteRemotePairSingle
-            | Strategy::NakedTriple | Strategy::HiddenTriple | Strategy::NakedQuad
-            | Strategy::HiddenQuad | Strategy::RemotePair
-            | Strategy::Backtrack
-                => true,
+            Strategy::Primaries
+            | Strategy::HiddenSingle
+            | Strategy::NakedPair
+            | Strategy::HiddenPair
+            | Strategy::LockedCandidatePointing
+            | Strategy::LockedCandidateClaiming
+            | Strategy::XWing
+            | Strategy::ChuteRemotePairDouble
+            | Strategy::ChuteRemotePairSingle
+            | Strategy::NakedTriple
+            | Strategy::HiddenTriple
+            | Strategy::NakedQuad
+            | Strategy::HiddenQuad
+            // | Strategy::RemotePair
+            | Strategy::SimpleColoring
+            | Strategy::Backtrack => true,
         }
     }
 
@@ -151,9 +163,10 @@ impl Strategy {
             Strategy::NakedQuad => apply_naked_group(board, 4),
             Strategy::HiddenQuad => apply_hidden_group(board, 4),
             Strategy::XWing => apply_xwing(board),
-            Strategy::RemotePair => apply_remote_pairs(board),
+            // Strategy::RemotePair => apply_remote_pairs(board),
             Strategy::ChuteRemotePairDouble => apply_chute_remote_pair(board, CRPType::Double),
             Strategy::ChuteRemotePairSingle => apply_chute_remote_pair(board, CRPType::Single),
+            Strategy::SimpleColoring => simple_coloring::apply(board),
             Strategy::Backtrack => solve_backtrack(board),
         }
     }
@@ -172,15 +185,15 @@ impl SolvedGame {
     }
 }
 
-
-pub fn solve(mut board: SudokuBoard) -> Result<SolvedGame, SudokuError>
-{
+pub fn solve(mut board: SudokuBoard) -> Result<SolvedGame, SudokuError> {
     let mut boards = Vec::<SudokuBoard>::new();
     let mut steps = Vec::<(Strategy, Vec<Highlight>)>::new();
 
-    let strategies : Vec<_> = Strategy::iter_no_backtrack().collect();
+    let strategies: Vec<_> = Strategy::iter_no_backtrack().collect();
     while !board.is_finished() {
-        if !board.is_valid() { return Err(SudokuError::UnsolvableSudoku) }
+        if !board.is_valid() {
+            return Err(SudokuError::UnsolvableSudoku);
+        }
         let mut next = board.clone();
         if let ControlFlow::Break(step) = apply_strategies(&mut next, &strategies) {
             steps.push(step);
@@ -189,21 +202,27 @@ pub fn solve(mut board: SudokuBoard) -> Result<SolvedGame, SudokuError>
         } else {
             // we did not advance
             debug_assert_eq!(board, next);
-            break
+            break;
         }
     }
     // assert!(solve_backtrack(board.clone()).is_some());
 
     boards.push(board);
 
-    let strategies: Vec<_>  = steps.iter()
-        .fold(vec![false; Strategy::COUNT], |mut acc, (strat, _)|{
-            acc[ *strat as usize ] = true;
+    let strategies: Vec<_> = steps
+        .iter()
+        .fold(vec![false; Strategy::COUNT], |mut acc, (strat, _)| {
+            acc[*strat as usize] = true;
             acc
-        }).into_iter().zip(Strategy::iter())
-        .filter_map(|(b, strat)| {
-            if b { Some(strat) } else { None }
-        }).collect();
+        })
+        .into_iter()
+        .zip(Strategy::iter())
+        .filter_map(|(b, strat)| if b { Some(strat) } else { None })
+        .collect();
 
-    Ok(SolvedGame { boards, steps, strategies })
+    Ok(SolvedGame {
+        boards,
+        steps,
+        strategies,
+    })
 }

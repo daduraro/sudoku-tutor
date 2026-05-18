@@ -20,6 +20,14 @@ pub struct Graph<Node> {
     edges: Vec<Vec<usize>>,
 }
 
+pub enum TwoColorized {
+    Consistent(Vec<usize>, Vec<usize>),
+    Inconsistent {
+        inconsistent: Vec<usize>,
+        other: Vec<usize>,
+    },
+}
+
 impl<Node> std::default::Default for Graph<Node> {
     fn default() -> Self {
         Self {
@@ -43,10 +51,7 @@ impl<Node> Graph<Node> {
         for (i, e) in edges.iter().enumerate() {
             assert!(e.iter().all(|j| *j != i));
         }
-        Self {
-            nodes,
-            edges,
-        }
+        Self { nodes, edges }
     }
 
     pub fn nodes(&self) -> &[Node] {
@@ -83,10 +88,14 @@ impl<Node> Graph<Node> {
         let mut processed = vec![false; self.nodes.len()];
         let mut current_cc = 0;
         for root in 0..self.nodes.len() {
-            if processed[root] { continue }
+            if processed[root] {
+                continue;
+            }
             let mut stack = vec![root];
             while let Some(i) = stack.pop() {
-                if processed[i] { continue }
+                if processed[i] {
+                    continue;
+                }
                 processed[i] = true;
                 ccs[i] = current_cc;
                 for &j in self.edges[i].iter() {
@@ -99,7 +108,9 @@ impl<Node> Graph<Node> {
     }
 
     pub fn split_connected_components(self) -> Vec<Graph<Node>> {
-        if self.nodes.is_empty() { return vec![self] }
+        if self.nodes.is_empty() {
+            return vec![self];
+        }
 
         let ccs = self.find_connected_components();
         let num_ccs = ccs.iter().max().unwrap() + 1;
@@ -117,7 +128,9 @@ impl<Node> Graph<Node> {
         };
 
         let mut new_graphs = Vec::new();
-        for _ in 0..num_ccs { new_graphs.push((Vec::new(), Vec::new())); }
+        for _ in 0..num_ccs {
+            new_graphs.push((Vec::new(), Vec::new()));
+        }
 
         for (i, (node, edges)) in self.nodes.into_iter().zip(self.edges).enumerate() {
             let graph = &mut new_graphs[ccs[i]];
@@ -126,25 +139,32 @@ impl<Node> Graph<Node> {
             graph.1.push(edges);
         }
 
-        new_graphs.into_iter().map(|(nodes, edges)| Self::new(nodes, edges)).collect()
+        new_graphs
+            .into_iter()
+            .map(|(nodes, edges)| Self::new(nodes, edges))
+            .collect()
     }
 
-    pub fn two_colorize(&self) -> Option<(Vec<usize>, Vec<usize>)> {
-        if self.is_empty() { return None }
-
+    pub fn two_colorize(&self) -> TwoColorized {
+        let mut inconsistent_coloring = None;
         let colors: Vec<_> = {
             let mut colors = vec![None; self.len()];
 
             for root in 0..self.len() {
-                if colors[root].is_some() { continue }
+                if colors[root].is_some() {
+                    continue;
+                }
 
                 let mut stack = Vec::new();
                 stack.push((root, TwoColor::Red));
 
                 while let Some((i, color)) = stack.pop() {
-                    if let Some(expected_color) = colors[i] {
-                        if expected_color != color { return None }
-                        else { continue }
+                    if let Some(assigned_color) = colors[i] {
+                        // ignore edge as the other node has been already colorized
+                        if assigned_color != color {
+                            inconsistent_coloring = Some(assigned_color);
+                        }
+                        continue;
                     }
 
                     colors[i] = Some(color);
@@ -168,7 +188,20 @@ impl<Node> Graph<Node> {
             nodes.push(i);
         }
 
-        Some((red_nodes, black_nodes))
+        if let Some(color) = inconsistent_coloring {
+            match color {
+                TwoColor::Red => TwoColorized::Inconsistent {
+                    inconsistent: red_nodes,
+                    other: black_nodes,
+                },
+                TwoColor::Black => TwoColorized::Inconsistent {
+                    inconsistent: black_nodes,
+                    other: red_nodes,
+                },
+            }
+        } else {
+            TwoColorized::Consistent(red_nodes, black_nodes)
+        }
     }
 
     pub fn shortest_chain(&self, origin: usize, dest: usize) -> Option<Vec<usize>> {
@@ -177,9 +210,13 @@ impl<Node> Graph<Node> {
 
         while let Some(chain) = queue.pop_front() {
             let curr = *chain.last().unwrap();
-            if curr == dest { return Some(chain) }
+            if curr == dest {
+                return Some(chain);
+            }
             for neighbour in self.edges_of(curr) {
-                if chain.contains(neighbour) { continue } // graph loop, ignore
+                if chain.contains(neighbour) {
+                    continue;
+                } // graph loop, ignore
                 let mut chain = chain.clone();
                 chain.push(*neighbour);
                 queue.push_back(chain);
